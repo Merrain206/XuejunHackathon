@@ -239,9 +239,14 @@ def test_acceptance_8c_demo_pages_are_the_verified_ones(real_db: None):
     assert pages == {"EV-STR-001": 322, "EV-STR-002": 324, "EV-STR-003": 321}, pages
     totals_quote = next(e for e in payload["evidence"] if e["id"] == "EV-STR-003")["source_quote"]
     assert "16,088.21" in totals_quote and "27,170.18" in totals_quote
+    assert "万元" in totals_quote and "\n" in totals_quote, "表格摘录应保留可读的单位和分行"
 
     prof = demo_handlers.build_demo_response(DEMO_CODE, Q_PROFITABILITY)
     assert {e["source_page"] for e in prof["evidence"]} == {8, 9}
+    pro_quotes = {e["id"]: e["source_quote"] for e in prof["evidence"]}
+    assert "17.70%" in pro_quotes["EV-PRO-001"] and "2.06%" in pro_quotes["EV-PRO-001"]
+    assert "2.93%" in pro_quotes["EV-PRO-002"]
+    assert all("元" in pro_quotes[key] for key in ("EV-PRO-001", "EV-PRO-002"))
 
     risk = demo_handlers.build_demo_response(DEMO_CODE, Q_RISK)
     assert {e["source_page"] for e in risk["evidence"]} == {2, 43}

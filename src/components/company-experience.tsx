@@ -167,7 +167,8 @@ function EvidenceDrawer({ item, onClose }: { item: Evidence; onClose: () => void
 
           <div className="mt-7 rounded-sm border border-slate-200 bg-white p-5">
             <p className="eyebrow">Original excerpt</p>
-            <blockquote className="mt-4 border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">“{item.sourceQuote}”</blockquote>
+            <blockquote className="mt-4 whitespace-pre-line border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">“{item.sourceQuote}”</blockquote>
+            <p className="mt-3 text-[11px] leading-5 text-slate-400">表格型原文按列整理以便阅读，未改动披露数值。</p>
           </div>
 
           <a className="mt-6 flex items-center justify-between border-b border-slate-950 pb-3 text-sm font-semibold text-slate-950 transition-colors hover:text-teal-700" href={`${item.sourceUrl}#page=${item.sourcePage}`} target="_blank" rel="noreferrer">
@@ -207,7 +208,7 @@ export function CompanyExperience() {
   const [question, setQuestion] = useState("");
   const [askedQuestion, setAskedQuestion] = useState("");
   const [response, setResponse] = useState<AskResponse | null>(null);
-  const [dataMode, setDataMode] = useState<AskResponse["sourceMode"]>("mock");
+  const [dataMode, setDataMode] = useState<AskResponse["sourceMode"] | "pending">("pending");
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState(0);
   const [error, setError] = useState("");
@@ -259,7 +260,7 @@ export function CompanyExperience() {
       <header className="border-b border-slate-200/90 bg-[#f8faf7]">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12">
           <div className="flex items-center gap-3"><ScanMark /><div><p className="text-sm font-semibold tracking-tight">ASK THE COMPANY</p><p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Evidence intelligence</p></div></div>
-          <div className={`source-badge ${dataMode}`}><span className="status-dot" />{dataMode === "api" ? "LIVE API" : dataMode === "fallback" ? "DEMO FALLBACK" : "DEMO DATA"}</div>
+          <div className={`source-badge ${dataMode}`}><span className="status-dot" />{dataMode === "api" ? "LIVE API" : dataMode === "fallback" ? "DEMO FALLBACK" : dataMode === "mock" ? "DEMO DATA" : "等待首次提问"}</div>
         </div>
       </header>
 

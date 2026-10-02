@@ -73,7 +73,8 @@ QUESTION_RISK = "目前最值得关注的风险是什么？"
 #                   的 source_url / document_title；**不是**库里的 docs.source_url
 #   document_id  —— cninfo.db 的 docs.id，用于把引用回溯到库内原文做逐字核验
 #   page         —— ★ PDF 查看器页码；必须与原文实际所在页一致
-#   quote        —— ★ 展示给用户的原文摘录，必须是该页的**逐字**子串
+#   quote        —— ★ 展示给用户的原文摘录；表格可按列转写，但不得改动数值
+#   verify_quote —— 可选；表格转写前的逐字子串，仅用于回到 PDF / 数据库核验
 #   category     —— financial / business / company（前端只认这三个）
 #   period       —— 期间标签
 #   content      —— 证据摘要
@@ -126,12 +127,17 @@ _FACTS: dict[str, dict[str, Any]] = {
             "主营业务收入由 2021 年的 16,088.21 万元增至 2023 年的 27,170.18 万元，"
             "收入结构变化发生在整体增长之中。"
         ),
-        "quote": "合计27,170.18100.00%20,602.47100.00%16,088.21100.00%",
+        "quote": (
+            "主营业务收入合计：\n"
+            "2023 年 27,170.18 万元（100.00%）；\n"
+            "2022 年 20,602.47 万元（100.00%）；\n"
+            "2021 年 16,088.21 万元（100.00%）。"
+        ),
+        "verify_quote": "合计27,170.18100.00%20,602.47100.00%16,088.21100.00%",
     },
     # ---------------- 盈利质量（上交所 2025 年半年度报告） ----------------
-    #: ⚠️ 半年报第 8 页是「主要会计数据」表格，PDF 文本层是「科目 → 本期 → 上年
-    #:    同期 → 增减(%)」竖排的；这里按**原样**摘录，不重排成一句话
-    #:    （重排后就不再是该页的逐字原文，无法核验）。
+    #: ⚠️ 半年报第 8 页是「主要会计数据」表格。`quote` 按列转写供前端阅读，
+    #:    `verify_quote` 保留 PDF 文本层的逐字子串供自动核验。
     "EV-PRO-001": {
         "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
@@ -143,6 +149,12 @@ _FACTS: dict[str, dict[str, Any]] = {
             "归属于上市公司股东的净利润 54,007,712.64 元（同比 +2.06%）。"
         ),
         "quote": (
+            "主要会计数据（本报告期 / 上年同期 / 同比增减）：\n"
+            "营业收入：176,848,509.44 元 / 150,248,052.96 元 / 增长 17.70%；\n"
+            "利润总额：58,529,309.18 元 / 59,496,310.95 元 / 下降 1.63%；\n"
+            "归属于上市公司股东的净利润：54,007,712.64 元 / 52,918,429.73 元 / 增长 2.06%。"
+        ),
+        "verify_quote": (
             "营业收入176,848,509.44150,248,052.9617.70"
             "利润总额58,529,309.1859,496,310.95-1.63"
             "归属于上市公司股东的净利润54,007,712.6452,918,429.732.06"
@@ -156,6 +168,11 @@ _FACTS: dict[str, dict[str, Any]] = {
         "period": "2025 年上半年",
         "content": "扣非归母净利润同比下降 2.93%，利润增速明显低于收入增速。",
         "quote": (
+            "主要会计数据（本报告期 / 上年同期 / 同比增减）：\n"
+            "归属于上市公司股东的扣除非经常性损益的净利润："
+            "47,074,322.51 元 / 48,493,603.14 元 / 下降 2.93%。"
+        ),
+        "verify_quote": (
             "归属于上市公司股东的扣除非经常性损益的净利润"
             "47,074,322.5148,493,603.14-2.93"
         ),
@@ -598,7 +615,7 @@ def verify_facts(*, stock_code: str = DEMO_COMPANY_CODE) -> list[str]:
     for key, fact in _FACTS.items():
         document_id = int(fact["document_id"])
         page = int(fact["page"])
-        quote = str(fact["quote"])
+        quote = str(fact.get("verify_quote", fact["quote"]))
 
         source = verified_sources.source_for(str(fact["source"]))
         if source is None:
@@ -668,7 +685,8 @@ def verify_facts_against_pdf(reader_factory: Any, documents: dict[str, Any]) -> 
         pages = cache[source_key]
         if not pages:
             continue
-        actual = sorted(p for p, text in pages.items() if re_squeeze(str(fact["quote"])) in text)
+        verification_quote = str(fact.get("verify_quote", fact["quote"]))
+        actual = sorted(p for p, text in pages.items() if re_squeeze(verification_quote) in text)
         declared = int(fact["page"])
         if not actual:
             problems.append(f"{key}: 引文在《{source.title}》里逐字核不到")
