@@ -1,0 +1,36 @@
+{
+  "name": "ai-web-ppt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 网页 PPT 生成器：粘贴长文档 → 大模型流式拆解为多页 PPT → 全屏网页演示 / 离线 HTML / PPTX 导出",
+  "type": "module",
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "node server/index.js",
+    "dev:web": "node scripts/vite-run.mjs --configLoader runner --config web/vite.config.mjs",
+    "build": "node scripts/vite-run.mjs build --config web/vite.config.mjs",
+    "check": "node scripts/check-env.mjs",
+    "check:json": "node scripts/check-env.mjs --json",
+    "start": "node scripts/serve.mjs",
+    "start:prod": "node scripts/serve.mjs",
+    "start:single": "node server/index.js",
+    "test": "node --test --test-isolation=none --test-force-exit \"tests/**/*.test.js\"",
+    "test:unit": "node --test --test-isolation=none --test-force-exit \"tests/unit/*.test.js\"",
+    "test:e2e": "npm run build && node --test --test-isolation=none --test-force-exit \"tests/e2e/*.test.js\""
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "jszip": "3.10.2",
+    "pptxgenjs": "4.0.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.1.1",
+    "fast-xml-parser": "5.11.1",
+    "vite": "8.3.0"
+  }
+}

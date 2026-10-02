@@ -1,0 +1,53 @@
+# ---- 机密与本地配置 ----
+.env
+.env.local
+.env.*.local
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# ---- 数据库（含 WAL/SHM 边车文件）----
+xray.db
+xray.db-wal
+xray.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- 运行期产出 ----
+logs/
+*.log
+cache/
+exports/
+*.pptx
+
+# ---- 测试临时目录 ----
+# .pytest-run 是 pytest 的 basetemp，.pytest-data 放测试库与 scratch（见 tests/conftest.py）
+.pytest-run/
+.pytest-data/
+.pytest_cache/
+.test-tmp/
+.pytest-tmp*/
+
+# ---- 数据源（体积大、由外部提供，不入版本库）----
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

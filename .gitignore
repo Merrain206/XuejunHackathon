@@ -1,0 +1,56 @@
+# ============================================================================
+#  工作区根目录 .gitignore
+#  （xray-backend/ 有它自己的 .gitignore，git 会自动叠加生效）
+# ============================================================================
+
+# ---- 运行时 / 依赖 ----
+node_modules/
+.npm-cache/
+runtime/
+
+# ---- 构建产物 ----
+web/dist/
+
+# ---- 机密与本地配置 ----
+.env
+.env.local
+.env.*.local
+
+# ---- 运行期产出 ----
+outputs/
+uploads/
+logs/
+*.log
+.exports/
+*.pptx
+
+# ---- 附件副本（Harness 落盘的只读副本，非源码）----
+.attachments-tmp/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ---- 测试与审计临时目录 ----
+.test-tmp/
+.pytest-run/
+.pytest-data/
+.pytest-tmp*/
+
+# ---- 数据源（体积大、由外部提供，不入版本库）----
+# 注意：xray-backend/data/ 由 xray-backend/.gitignore 覆盖；
+# 这里覆盖工作区根的 data/（真实库 cninfo.db 约 11MB）
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
