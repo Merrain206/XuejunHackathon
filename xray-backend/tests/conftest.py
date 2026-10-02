@@ -604,7 +604,8 @@ def build_extended_db(path: Path) -> None:
             company_code TEXT NOT NULL, document_id INTEGER NOT NULL,
             category TEXT, metric TEXT, period TEXT, value REAL, unit TEXT,
             content TEXT, source_page INTEGER, source_quote TEXT,
-            method TEXT, review_status TEXT DEFAULT 'auto', created_at TEXT)"""
+            method TEXT, review_status TEXT DEFAULT 'auto', created_at TEXT,
+            excluded INTEGER NOT NULL DEFAULT 0, excluded_reason TEXT)"""
     )
 
     for code, docs in _EXT_DOCS.items():
@@ -690,6 +691,13 @@ def build_extended_db(path: Path) -> None:
                 review,
             ),
         )
+    # 一条内容、页码都合法但已被数据库明确隔离的 Evidence。后端不能因为它
+    # 自己的原文核验能通过，就绕过 excluded 状态重新把它放进候选集合。
+    con.execute(
+        "UPDATE evidence SET excluded = 1, excluded_reason = '测试隔离' "
+        "WHERE id = (SELECT id FROM evidence WHERE company_code = '600570' "
+        "AND metric = 'revenue' AND period = '2025FY' LIMIT 1)"
+    )
     con.commit()
     con.close()
 

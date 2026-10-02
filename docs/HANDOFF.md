@@ -6,7 +6,7 @@
 
 ## 1. 项目目标
 
-Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；前端已能承载 `cninfo.db` 内四家公司，动态证据问答成功链路仍依赖后端与数据库任务。
+Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；前端四公司承载、候选数据库和后端动态问答的补充收口已通过自动化验收，真实 DeepSeek + 浏览器成功链路仍需人工联调。
 
 最高原则：`No Evidence, No Claim`。证据不足时固定回答：
 
@@ -16,7 +16,7 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 
 ## 2. 当前已经完成
 
-> 本节只描述已经完成并验收的能力。动态 LLM 问答尚未完成端到端验收，不能视为稳定现状。
+> 本节只描述已经完成并验收的能力。动态链路已通过数据库、合成后端、真实库与前端契约测试；尚未执行真实 DeepSeek + 浏览器人工验收，不能把它描述为比赛现场已验证的稳定链路。
 
 - Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 前端。
 - 公司页路由：`/company/{id}`，根路径自动跳转到 `/company/688583`。
@@ -33,6 +33,8 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 - 数字高亮、Evidence 可靠度等级与原因说明已经完成；官方来源识别覆盖上交所与巨潮资讯，可选 `verification_status` 支持 `verified`、`auto`、`pending`。
 - FastAPI 响应具有最小运行时校验；非法结构在思看科技降级为已核验 Demo，其他公司进入服务不可用状态。
 - 后端三条确定性回答、真实 SQLite 只读访问、上交所权威来源和四问样例已经接入代码库。
+- 四公司动态 Evidence-first 检索、DeepSeek 结构化回答与候选库重建工具已接入代码库；后端会过滤 `excluded=1`，Claim/Signal 数字按自身引用 Evidence 硬校验，无显式 Evidence ID 时不猜出处。
+- 新候选库全量 503 条 Evidence 中 407 条可参与回答，96 条隔离；407 条均为同页连续原文且不超过 200 字符，FTS 2845/2845。
 
 ## 3. 稳定 Demo 脚本
 
@@ -137,16 +139,18 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```powershell
 cd xray-backend
 python -m pip install -r requirements.txt
-# cninfo.db 放到仓库根目录即可，无需改 .env（会自动探测）
+# 动态四公司联调必须显式使用已验收候选库；不要擅自覆盖稳定 cninfo.db
+$env:DATABASE_PATH = "D:\Codes\XueJunHackathon\cninfo.multicompany.next.db"
+$env:DB_PATH_STRICT = "true"
 python main.py                        # http://127.0.0.1:8000
 curl.exe -s http://127.0.0.1:8000/health     # 看 db_path 与 database
 ```
 
-后端自测（两套必须分开跑）：
+后端自测（两套必须分开跑，数量以当前测试输出为准）：
 
 ```powershell
-python -m pytest tests -q          # 105 passed（合成库）
-python -m pytest tests_real -q     # 54 passed（真实库）
+python -m pytest tests -q
+python -m pytest tests_real -q
 ```
 
 2026-10-02 后端联调轮验证结果：四条问题全部 HTTP 200；三条稳定回答互不相同且各带
@@ -160,7 +164,7 @@ python -m pytest tests_real -q     # 54 passed（真实库）
 npm run build
 ```
 
-2026-10-02 验证结果：构建通过；四家公司切换、未知代码状态、切换清理和非思看公司断网隔离已完成人工验收。思看科技 3 个问题均返回不同答案，8 个 Claim 的 Evidence 均可点击，Evidence 抽屉正常，浏览器运行时错误为 0。动态 API 成功链路仍待后端与数据库任务完成后联调。
+2026-10-02 验证结果：构建通过；四家公司切换、未知代码状态、切换清理和非思看公司断网隔离已完成人工验收。思看科技 3 个问题均返回不同答案，8 个 Claim 的 Evidence 均可点击，Evidence 抽屉正常，浏览器运行时错误为 0。动态 API 已通过 Fake LLM、真实候选库和契约自动化验收，仍待真实 DeepSeek + 浏览器人工联调。
 
 ## 8. V0.2 架构：规划而非现状
 
@@ -170,10 +174,10 @@ npm run build
 
 ## 9. 下一步优先级
 
-1. 完成后端动态证据问答与四公司数据质量核验，再执行前后端成功链路联调。
+1. 用新候选库启动后端，配置真实 DeepSeek Key，完成四家公司浏览器人工成功链路验收。
 2. 保持思看科技确定性三问及其 Mock/Fallback 不退化，作为动态链路失败时的稳定 Demo。
-3. 动态问答采用“先检索候选 Evidence，再让模型组织答案，最后机械校验”的最小方案；第一版不要求图表。
-4. 后端就绪后验证四家公司 Answer、Claim、Signal、Evidence 与 `charts: []`，并确认无跨公司引用。
+3. 自动化补充验收已完成；是否用候选库替换稳定 `cninfo.db` 仍由产品负责人决定。
+4. 验收四家公司 Answer、Claim、Signal、Evidence 与 `charts: []`，确认没有跨公司引用、跨 Evidence 数字借用或被隔离证据泄漏。
 
 需要用户决策的问题：真实后端契约发生变化、是否启用维护模式、是否牺牲 Demo 稳定性增加新功能。不要擅自扩大范围。
 

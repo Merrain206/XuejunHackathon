@@ -34,6 +34,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+import stat
 import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -331,6 +332,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         log("候选库已存在，覆盖（每次都是全新的完整副本，不做增量修改）")
         os.remove(dst)
     shutil.copy2(src, dst)
+    # Windows 上 copy2 会继承源库的只读属性。稳定库可以保持只读，但候选库必须
+    # 可写，否则紧接着的 DROP/CREATE 会报 "attempt to write a readonly database"。
+    os.chmod(dst, os.stat(dst).st_mode | stat.S_IWUSR)
     log(f"已复制 {os.path.getsize(dst)} bytes")
 
     conn = sqlite3.connect(dst)

@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     DEEPSEEK_THINKING: bool = True
     #: 思考强度；None 时不传该参数（部分模型不支持）
     DEEPSEEK_REASONING_EFFORT: str | None = "high"
-    REQUEST_TIMEOUT_MS: int = 120_000
+    REQUEST_TIMEOUT_MS: int = 40_000
     #: ⚠️ 思考模式（deepseek-flash + thinking）下，**reasoning token 也从这个上限里扣**。
     #: 实测：分析 2 条公告并输出 JSON，推理就吃掉 900+ token，正文直接为空
     #: （finish_reason=stop 但 content 为空 → 被判定 empty_response）。

@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 #: 允许从任意工作目录直接执行本脚本（找出 evidence_verify.py 所在目录）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from evidence_verify import extract_pages, summarize, verify_record  # noqa: E402
+from evidence_verify import extract_pages, normalize, summarize, verify_record  # noqa: E402
 
 #: 固定公司名（产品负责人确认）
 COMPANY_NAMES: Dict[str, str] = {
@@ -281,6 +281,9 @@ def render_report(
     rejected = [r for r in records if r["status"] == "rejected"]
     missing = [r for r in records if r["status"] == "missing"]
     excluded = [r for r in records if r["status"] == "excluded"]
+    quote_lengths = sorted(len(normalize(r.get("source_quote") or "")) for r in checked)
+    longest_quote = quote_lengths[-1] if quote_lengths else 0
+    p90_quote = quote_lengths[max(0, (len(quote_lengths) * 9 + 9) // 10 - 1)] if quote_lengths else 0
 
     lines: List[str] = []
     lines.append("# 四公司 Evidence 数据质量抽检报告")
@@ -314,6 +317,7 @@ def render_report(
     lines.append(f"| 引文不是连续原文（需按 segment 核验） | "
                  f"{len(checked) - contiguous_count} |")
     lines.append(f"| 已隔离（不参与回答） | {len(excluded)} |")
+    lines.append(f"| 可用引文长度 P90 / 最大值 | {p90_quote} / {longest_quote} 字符 |")
     lines.append("")
     lines.append("> 「连续原文」= 忽略空白后，引文是标注页原文的一段**连续子串** —— "
                  "后端 `db.page_from_markers()` 用的就是这条口径。")
@@ -479,6 +483,8 @@ def render_report(
         "urls_probed": len(probes),
         "urls_failed": len([p for p in probes.values() if not p.get("ok")]),
         "rejected_ids": [r["id"] for r in rejected],
+        "quote_length_p90": p90_quote,
+        "quote_length_max": longest_quote,
     }
     return "\n".join(lines), summary
 

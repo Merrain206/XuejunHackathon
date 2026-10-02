@@ -52,7 +52,17 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 #: 允许从任意工作目录直接执行本脚本（找出 evidence_verify.py 所在目录）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from evidence_verify import extract_pages, verify_record  # noqa: E402
+from evidence_verify import (  # noqa: E402
+    extract_pages,
+    is_placeholder,
+    normalize,
+    split_segments,
+    verify_record,
+)
+from repair_evidence_quotes import (  # noqa: E402
+    MAX_REPAIRED_QUOTE_CHARS,
+    _extra_content,
+)
 
 COMPANY_NAMES: Dict[str, str] = {
     "000066": "中国长城",
@@ -365,6 +375,7 @@ def check_evidence(conn: sqlite3.Connection, checker: Checker,
     totals: Dict[str, int] = {}
     rejected: List[Dict[str, Any]] = []
     non_contiguous: List[Dict[str, Any]] = []
+    polluted: List[Dict[str, Any]] = []
 
     for code in codes:
         rows = conn.execute(
@@ -414,6 +425,27 @@ def check_evidence(conn: sqlite3.Connection, checker: Checker,
                     "page": row["source_page"], "id": row["id"],
                     "metric": row["metric"],
                 })
+            if "excluded" in row_keys and not bool(row["excluded"]):
+                quote = str(row["source_quote"] or "")
+                if len(normalize(quote)) > MAX_REPAIRED_QUOTE_CHARS:
+                    polluted.append({
+                        "company_code": code, "document_id": doc_id,
+                        "page": row["source_page"], "id": row["id"],
+                        "reason": f"引文超过 {MAX_REPAIRED_QUOTE_CHARS} 字符",
+                    })
+                original = row["original_quote"] if "original_quote" in row_keys else None
+                repaired = bool(row["quote_repaired"]) if "quote_repaired" in row_keys else False
+                if repaired and original:
+                    content = [
+                        s for s in split_segments(original) if not is_placeholder(s)
+                    ]
+                    extra = _extra_content(quote, content)
+                    if extra:
+                        polluted.append({
+                            "company_code": code, "document_id": doc_id,
+                            "page": row["source_page"], "id": row["id"],
+                            "reason": f"卷入原引文之外的数字 {extra[:8]}",
+                        })
         name = COMPANY_NAMES.get(code, code)
         print(f"  {name}（{code}）：{len(rows)} 条 → "
               f"verified {counts.get('verified', 0)}、auto {counts.get('auto', 0)}、"
@@ -461,6 +493,14 @@ def check_evidence(conn: sqlite3.Connection, checker: Checker,
             print(f"    ... 其余 {len(non_contiguous) - 20} 条")
     else:
         checker.ok("全部引文都是标注页的连续原文")
+
+    if polluted:
+        checker.fail(f"有 {len(polluted)} 条 Evidence 引文过长或卷入额外数字")
+        for item in polluted[:20]:
+            print(f"    - {item['company_code']} evidence {item['id']} "
+                  f"document_id={item['document_id']} page={item['page']}：{item['reason']}")
+    else:
+        checker.ok("全部可用 Evidence 均满足精确摘录长度与数字边界")
 
 
 # ---------------------------------------------------------------------------

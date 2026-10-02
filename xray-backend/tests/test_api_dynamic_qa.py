@@ -266,7 +266,7 @@ def test_unknown_severity_is_coerced_not_dropped(candidates):
 
 
 def test_unsupported_numbers_are_reported(candidates):
-    """answer 里的关键数字核不到 → 记下原因（默认只警告，不硬失败）。"""
+    """Answer 带入未被最终 Evidence 支撑的数字时，用已验证 Claim 重建。"""
     payload = {
         "answer": "营业收入同比增长 99.99%，表现强劲。",
         "claims": [{"id": "CL-1", "text": "同比增长 17.70%", "evidence_ids": ["EV-001"]}],
@@ -274,6 +274,8 @@ def test_unsupported_numbers_are_reported(candidates):
     }
     validated, notes = _validate(payload, candidates)
     assert any("99.99" in n for n in notes)
+    assert "99.99" not in validated["answer"]
+    assert "17.70" in validated["answer"]
 
 
 def test_strict_numbers_mode_degrades(candidates):
@@ -311,17 +313,66 @@ def test_prose_answer_with_evidence_ids_becomes_claims(candidates):
     assert any("机械转换" in n for n in notes)
 
 
-def test_prose_answer_without_ids_binds_by_numbers(candidates):
-    """模型连编号都忘了写，但数字是真的 → 用数字回绑证据。"""
+def test_prose_answer_without_ids_is_rejected(candidates):
+    """相同数字可能出现在多条证据中；没有显式 ID 时不得猜出处。"""
     payload = {
         "answer": "2025 年度营业收入为 176,848,509.44 元，同比下降 17.70%。",
         "claims": [],
         "signals": [],
     }
     validated, notes = _validate(payload, candidates)
-    assert validated["claims"], "数字能在候选摘录里核到时应当回绑成功"
-    assert validated["claims"][0]["evidence_ids"] == ["EV-001"]
-    assert any("机械转换" in n for n in notes)
+    assert validated["answer"] == INSUFFICIENT_ANSWER
+    assert validated["claims"] == []
+    assert validated["evidence"] == []
+    assert any("整次按证据不足处理" in n for n in notes)
+
+
+def test_claim_cannot_borrow_number_from_unreferenced_evidence(candidates):
+    """EV-002 有 32.59%，不代表只引用 EV-001 的 Claim 可以使用它。"""
+    payload = {
+        "answer": "经营现金流同比下降 32.59%。",
+        "claims": [
+            {"id": "CL-1", "text": "经营现金流同比下降 32.59%", "evidence_ids": ["EV-001"]}
+        ],
+        "signals": [],
+    }
+    validated, notes = _validate(payload, candidates)
+    assert validated["answer"] == INSUFFICIENT_ANSWER
+    assert validated["claims"] == []
+    assert any("未被其引用 Evidence 支撑" in n for n in notes)
+
+
+def test_signal_numbers_must_match_its_own_evidence(candidates):
+    payload = {
+        "answer": "营业收入同比增长 17.70%。",
+        "claims": [
+            {"id": "CL-1", "text": "营业收入同比增长 17.70%", "evidence_ids": ["EV-001"]}
+        ],
+        "signals": [
+            {"id": "SIG-1", "type": "trend", "title": "现金流下降 32.59%",
+             "severity": "attention", "description": "需要关注", "evidence_ids": ["EV-001"]}
+        ],
+    }
+    validated, notes = _validate(payload, candidates)
+    assert validated["claims"]
+    assert validated["signals"] == []
+    assert any("signal SIG-1" in n for n in notes)
+
+
+def test_evidence_limit_drops_whole_claim_instead_of_weakening_reference(candidates):
+    payload = {
+        "answer": "营业收入增长 17.70%，经营现金流下降 32.59%。",
+        "claims": [
+            {"id": "CL-1", "text": "营业收入增长 17.70%", "evidence_ids": ["EV-001"]},
+            {"id": "CL-2", "text": "经营现金流下降 32.59%", "evidence_ids": ["EV-001", "EV-002"]},
+        ],
+        "signals": [],
+    }
+    validated, notes = _validate(payload, candidates, max_evidence=1)
+    assert [claim["id"] for claim in validated["claims"]] == ["CL-1"]
+    assert [evidence["id"] for evidence in validated["evidence"]] == ["EV-001"]
+    assert "32.59" not in validated["answer"]
+    assert any("32.59" in note for note in notes)
 
 
 def test_prose_answer_with_invented_numbers_is_not_converted(candidates):

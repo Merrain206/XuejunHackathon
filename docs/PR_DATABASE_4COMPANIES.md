@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `cninfo.multicompany.next.db`（仓库根目录） |
 | 大小 | 122,277,888 bytes（116.6 MiB） |
-| SHA-256 | `40c1ccdcf0a405ed602ec2b78fd210da983e4c546afe73f819cbc5b924dee205` |
+| SHA-256 | `13f95fad520c56539e9b32227c6d48697691ebb56b9c74c20cc3c60fc1567670` |
 | 生成方式 | 见第 2 节两条命令，从稳定库复制后只改候选库 |
 
 **获取步骤（任何同学可复现）：**
@@ -98,10 +98,10 @@ python test_evidence_verify.py
 
 - 覆盖率：**2845/2845 = 100%**，无遗漏、无越界索引、rowid 与 `chunks.id` 一一对应
 - `meta.fts_mode = 'trigram'` 与真实 tokenizer 一致（脚本校验，不一致直接判失败）
-- 检索耗时：最慢 **5.5 ms**、平均 **1.55 ms**（目标 < 300 ms）
+- 检索耗时：最慢 **3.08 ms**、平均 **1.15 ms**（目标 < 300 ms）
 - 公司隔离：四公司 × 三关键词（营业收入 / 归属于上市公司股东的净利润 /
   经营活动产生的现金流量净额）**0 泄漏**
-- LIKE 兜底（FTS 不可用时）：最慢 **2.62 ms**，同样 0 泄漏
+- LIKE 兜底（FTS 不可用时）：最慢 **2.85 ms**，同样 0 泄漏
 
 修复前 FTS 只覆盖恒生电子，也就是说思看科技、中国长城、贝达药业三家
 **在全文检索里完全不可见** —— 这是本次最关键的修复。
@@ -115,12 +115,12 @@ python test_evidence_verify.py
 | 判定 | 条数 | 说明 |
 |---|---:|---|
 | `verified` | 3 | 人工复核（思看科技风险证据） |
-| `auto` | 497 | 机械校验通过 |
+| `auto` | 404 | 机械校验通过 |
 | `rejected` | **0** | 无 |
-| `excluded` | 3 | 显式隔离，不参与回答 |
-| **通过率（不含隔离）** | **500/500 = 100%** | |
+| `excluded` | 96 | 显式隔离，不参与回答 |
+| **通过率（不含隔离）** | **407/407 = 100%** | |
 
-引文可核验性：**连续原文 500/500**（修复前只有 3 条）。
+引文可核验性：**连续原文 407/407**（修复前只有 3 条）；可用引文长度 P90/最大值为 **65/118 字符**。另有 93 条因连续区间会卷入原引文之外的数字而隔离，加上原有 3 条缺陷记录，共隔离 96 条。
 `source_url` 可达性：抽检涉及 30 个去重 URL，**实测全部 HTTP 200**（真实发请求，非字符串替换）。
 
 ### 5.1 引文修复（本 PR 的核心修正之一）
@@ -189,7 +189,7 @@ python test_evidence_verify.py
 | 贝达药业 300558 | **无** `accounts_receivable` / `inventory` |
 | 恒生电子 / 中国长城 / 贝达药业 | **无**结构化风险 Evidence（风险问题只能靠 chunks 检索，不得虚构） |
 | 全库 | **1631 份有效文档没有 chunks** —— 行级检索只能覆盖有 chunks 的 30 份文档 |
-| 全库 | `evidence.excluded = 1` 的 3 条已隔离，未从根上修正抽取规则 |
+| 全库 | `evidence.excluded = 1` 的 96 条已隔离，未从根上修正上游抽取规则 |
 
 四家公司均覆盖 5 个必查核心指标（revenue / net_profit_attr / operating_cash_flow /
 total_assets / eps）。完整矩阵见 `docs/coverage_matrix.md`。
@@ -214,7 +214,7 @@ total_assets / eps）。完整矩阵见 `docs/coverage_matrix.md`。
 test_evidence_verify.py                      EXIT=0   63 个用例全部通过
 rebuild_fts_4companies.py --verify-only      EXIT=0   自检全部通过
 repair_evidence_quotes.py                    EXIT=0   重复执行为 0 改动（幂等）
-evidence_audit.py --full                     EXIT=0   rejected 0、连续原文 500/500
+evidence_audit.py --full --no-network        EXIT=0   rejected 0、连续原文 407/407
 build_company_catalog.py                     EXIT=0
 acceptance_check.py                          EXIT=0   18 项通过 / 0 项失败
 ```
@@ -256,7 +256,7 @@ acceptance_check.py                          EXIT=0   18 项通过 / 0 项失败
    老库（缺 `excluded` 列）会自动退化，不会报错。
 2. **`source_quote` 现在可以直接自证**：`db.page_from_markers()` 对库里的
    `source_quote` 全部能核到，无需改为 segment 级核验。
-3. **`excluded = 1` 的记录不得用于回答**：目前 3 条，都是 `period` 为空的缺陷记录。
+3. **`excluded = 1` 的记录不得用于回答**：目前 96 条，包括 3 条字段缺陷记录和 93 条无法安全生成精确短摘录的记录。
 4. **`auto` 不等于人工核验**：只有 3 条 `review_status='verified'`。
 5. 若要把库内 Evidence 喂给模型，建议从 `evidence_verify.py` 复用核验规则，
    避免自己实现时把「找不到」误判为通过。

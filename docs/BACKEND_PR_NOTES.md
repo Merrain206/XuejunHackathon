@@ -18,7 +18,7 @@
 | 温度 | `LLM_TEMPERATURE=0.2` |
 | 思看科技三条稳定问题 | **0.1–0.2 ms**（确定性处理器，不碰模型） |
 | 动态问答（真实模型，9 次） | **3.3–8.9 s** |
-| 硬上限 | `REQUEST_TIMEOUT_MS=120000`；远低于前端 45 s 约定 |
+| 硬上限 | `REQUEST_TIMEOUT_MS=40000`；低于前端 45 s，预留返回与渲染时间 |
 
 > 冒烟：`python scripts/smoke_dynamic.py`（四家公司 × 通用问题，会真联网、真花钱，
 > **不放进自动测试**）。
@@ -51,7 +51,7 @@
 
 ```powershell
 cd xray-backend
-python -m pytest tests -q        # 193 passed   （换库前基线 105，全部保留）
+python -m pytest tests -q        # 197 passed
 python -m pytest tests_real -q   # 101 passed, 1 skipped
 python scripts/check_frontend_contract.py   # 通过 25 项，前端契约完全一致
 ```
@@ -59,7 +59,8 @@ python scripts/check_frontend_contract.py   # 通过 25 项，前端契约完全
 新增测试覆盖（任务书第 7 节逐条）：
 
 * 四家公司检索严格隔离（候选文档必须属于本公司）；
-* 模型只能引用候选 Evidence ID；悬空 ID／跨响应 ID 被丢弃；
+* 模型只能引用候选 Evidence ID；悬空 ID／跨响应 ID 被丢弃；`excluded=1` 不会进入候选；
+* Claim/Signal 数字只能由其自身引用的 Evidence 支撑，Answer 只能使用最终返回 Evidence 的数字；
 * 无 Key、超时、限流、空响应、非法 JSON 全部稳定降级为固定兜底；
 * 动态回答 `charts=[]` 仍通过契约；
 * 员工水果问题**不调用模型**（连检索都不做）；
@@ -69,9 +70,8 @@ python scripts/check_frontend_contract.py   # 通过 25 项，前端契约完全
 
 ## 5. 本轮的关键取舍（都已在代码里写明理由）
 
-1. **引文核验不是整串子串匹配**：库里 `source_quote` 是表格转写（列间带 `|`），
-   整串匹配实测 100% 失败。改为三条规则：数字逐字出现在所引页 + 顺序一致 +
-   首末跨度 ≤ 200 字符。实测 485/503 通过，拒绝的 18 条都是真问题。
+1. **只使用数据库标记为可用的精确摘录**：候选库 503 条 Evidence 中有 407 条可参与回答，
+   均为所引页连续原文且不超过 200 字符；其余 96 条已隔离，后端查询层强制排除。
 2. **不含数字的定性引文**（风险因素）走更严格的口径：整串忽略空白后必须是
    该页原文的连续子串且 ≥ 20 字。否则 3 条 `review_status='verified'`
    的人工核验证据会被全数拒绝。
@@ -91,8 +91,8 @@ python scripts/check_frontend_contract.py   # 通过 25 项，前端契约完全
 
 早期实现只做整串 `json.loads` + 只认 `claims` 字段 → 一份**引用完全正确**的回答
 被整次降级成"无法回答"（界面看着像模型答不出来，其实是后端把它扔了）。
-现在解析做三层确定性容错 + 键名归一化，并把带数字/编号的句子机械转成 claim
-（数字还能反向绑定到候选证据）。
+现在解析做三层确定性容错 + 键名归一化；只有句子明确携带有效 `EV-xxx` 时才机械转成 Claim，
+再按该 ID 做数字硬校验。没有明确 Evidence ID 时不再凭相同数字猜测出处。
 
 ## 7. 已知限制
 
@@ -102,7 +102,7 @@ python scripts/check_frontend_contract.py   # 通过 25 项，前端契约完全
    动态证据的 `content` 由后端按已核验摘录重新拼。
 3. `evidence.period` 有误标（2025 半年报的行里混着 `2026FY`），
    报告期以 `docs.report_period` / 文档标题为准。
-4. 机械核验保守拒掉 18/503 条（数字顺序不一致 16 条、跨度超限 2 条）。
+4. 候选库隔离 96/503 条无法安全形成精确短摘录或字段有缺陷的 Evidence；动态链路可用 407 条。
 5. 动态回答 P0 固定 `charts: []`。
 6. 注册稿 PDF 不在版本库，页码核验用例需手工下载后才会跑（否则 skip）。
 7. `cninfo.db` 不入库；换库前的备份为 `cninfo.db.bak-20261002`（同样不入库）。

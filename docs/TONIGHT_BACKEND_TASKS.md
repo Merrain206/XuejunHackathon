@@ -1,5 +1,7 @@
 # 今晚任务书：后端 Agent
 
+> 状态：PR #8 已实现首轮动态问答；`docs/SUPPLEMENTAL_DATABASE_BACKEND_TASKS.md` 所列代码与自动化验收已完成，仍待真实 DeepSeek + 浏览器人工联调。
+
 > 日期：2026-10-02  
 > 基线提交：`057d18a`  
 > 目标：保留思看科技确定性 Demo，同时让四家公司能够回答未预设的金融问题。  

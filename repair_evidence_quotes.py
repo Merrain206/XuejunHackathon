@@ -15,12 +15,11 @@
 本身，必然能通过连续子串核验，而且仍然包含原来引用的每个标签和数字。
 **不改任何数字、不改页码、不做任何推测**：新引文是从页面原文里原样截取的。
 
-### 2. 3 条缺陷证据需要显式隔离
+### 2. 无法形成精确短摘录的记录需要显式隔离
 
-思看科技招股书里有 3 条规则抽取记录 `period` 为空（value 也抽错了），
-既无法定位报告期，也不能支撑回答。它们的 `period` 无法从页面原文推断，
-所以**不臆造字段值**，而是显式隔离：写 `excluded = 1` +
-`excluded_reason`，让后端默认查询自然排除，并保留留档。
+除 3 条已知字段缺陷外，如果覆盖全部目标片段的最短连续区间仍会卷入原引文
+没有的数字，或超过 200 字符，也不能支撑精确回答。脚本不臆造、不截断，统一
+写 `excluded = 1` + `excluded_reason`，让后端默认查询自然排除，并保留留档。
 
 ## 表结构变更（向后兼容）
 
@@ -36,12 +35,13 @@
     python repair_evidence_quotes.py --db cninfo.multicompany.next.db --dry-run
     python repair_evidence_quotes.py --db cninfo.multicompany.next.db
 
-退出码：0 = 修复完成且校验通过；1 = 有记录无法修复（需人工处理）。
+退出码：0 = 可修复记录已处理、不可安全修复记录已隔离且校验通过；1 = 校验失败。
 """
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import os
 import sqlite3
 import sys
@@ -81,6 +81,10 @@ COLUMNS = {
     "original_quote": "ALTER TABLE evidence ADD COLUMN original_quote TEXT",
 }
 
+# 与后端动态 Evidence 展示/核验使用同一跨度上限。超过这个长度的连续片段通常
+# 已经跨过多行表格，虽然“来自同一页”，却不再是精确、相关的原文摘录。
+MAX_REPAIRED_QUOTE_CHARS = 200
+
 
 def log(message: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -104,10 +108,12 @@ def ensure_columns(conn: sqlite3.Connection, *, dry_run: bool) -> List[str]:
 
 
 def load_records(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(evidence)")}
+    excluded = "e.excluded" if "excluded" in columns else "0"
     return conn.execute(
         "SELECT e.id, e.company_code, e.document_id, e.metric, e.period, e.value, e.unit, "
         "       e.source_page, e.source_quote, e.document_id, d.text_content, "
-        "       d.page_count "
+        f"       d.page_count, {excluded} AS excluded "
         "FROM evidence e JOIN docs d ON d.id = e.document_id ORDER BY e.id"
     ).fetchall()
 
@@ -117,15 +123,21 @@ def _extra_content(span: str, original_content: Sequence[str]) -> List[str]:
 
     只比数值：文字片段因为会跨行拼接，做父子串比较会误报。
     """
-    originals = {normalize(s) for s in original_content}
+    originals = Counter(
+        canonical_number(literal)
+        for segment in original_content
+        for literal in NUMBER_LITERAL.findall(segment)
+        if canonical_number(literal)
+    )
+    seen: Counter[str] = Counter()
     extra: List[str] = []
     for literal in NUMBER_LITERAL.findall(span):
         canonical = canonical_number(literal)
         if not canonical:
             continue
-        if any(canonical in o for o in originals):
-            continue
-        extra.append(literal)
+        seen[canonical] += 1
+        if seen[canonical] > originals[canonical]:
+            extra.append(literal)
     return extra
 
 
@@ -135,6 +147,8 @@ def plan_repairs(conn: sqlite3.Connection) -> Tuple[List[Dict[str, Any]], List[D
     unfixable: List[Dict[str, Any]] = []
 
     for row in load_records(conn):
+        if row["excluded"]:
+            continue
         pages = extract_pages(row["text_content"])
         page_text = pages.get(row["source_page"], "")
         original = row["source_quote"] or ""
@@ -174,6 +188,22 @@ def plan_repairs(conn: sqlite3.Connection) -> Tuple[List[Dict[str, Any]], List[D
             unfixable.append({"id": row["id"], "reason": "截取结果丢失内容片段"})
             continue
         extra = _extra_content(span, content)
+        if extra:
+            unfixable.append({
+                "id": row["id"],
+                "reason": f"连续区间卷入原引文之外的数字：{extra[:8]}",
+            })
+            continue
+        span_length = len(normalize(span))
+        if span_length > MAX_REPAIRED_QUOTE_CHARS:
+            unfixable.append({
+                "id": row["id"],
+                "reason": (
+                    f"最短连续区间为 {span_length} 字符，超过 "
+                    f"{MAX_REPAIRED_QUOTE_CHARS} 字符上限"
+                ),
+            })
+            continue
 
         planned.append({
             "id": row["id"],
@@ -203,15 +233,26 @@ def apply_repairs(
     return len(planned)
 
 
-def quarantine(conn: sqlite3.Connection, *, dry_run: bool) -> int:
-    """隔离已知缺陷证据：写 excluded=1 + 原因，不删行、不改其它字段。"""
+def quarantine(
+    conn: sqlite3.Connection,
+    unfixable: Sequence[Dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> int:
+    """隔离已知缺陷和无法安全修复的证据，不删行、不改事实字段。"""
+    reasons = dict(KNOWN_DEFECTIVE)
+    reasons.update({int(item["id"]): str(item["reason"]) for item in unfixable})
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(evidence)")}
+    excluded = "excluded" if "excluded" in columns else "0 AS excluded"
     count = 0
-    for ev_id, reason in KNOWN_DEFECTIVE.items():
+    for ev_id, reason in reasons.items():
         row = conn.execute(
-            "SELECT id, company_code, metric, period, value, source_page "
+            f"SELECT id, company_code, metric, period, value, source_page, {excluded} "
             "FROM evidence WHERE id = ?", (ev_id,)).fetchone()
         if row is None:
             log(f"⚠️ 待隔离的 evidence {ev_id} 不存在（可能已被处理）")
+            continue
+        if row["excluded"]:
             continue
         count += 1
         if dry_run:
@@ -231,7 +272,8 @@ def verify(conn: sqlite3.Connection) -> List[str]:
     failures: List[str] = []
 
     rows = conn.execute(
-        "SELECT e.id, e.source_page, e.source_quote, e.excluded, d.text_content "
+        "SELECT e.id, e.source_page, e.source_quote, e.original_quote, "
+        "       e.quote_repaired, e.excluded, d.text_content "
         "FROM evidence e JOIN docs d ON d.id = e.document_id ORDER BY e.id"
     ).fetchall()
     for row in rows:
@@ -245,6 +287,17 @@ def verify(conn: sqlite3.Connection) -> List[str]:
         if not is_contiguous_quote(row["source_quote"], page_text):
             failures.append(
                 f"evidence {row['id']} 的引文仍不是第 {row['source_page']} 页的连续原文")
+        if len(normalize(row["source_quote"])) > MAX_REPAIRED_QUOTE_CHARS:
+            failures.append(
+                f"evidence {row['id']} 的引文超过 {MAX_REPAIRED_QUOTE_CHARS} 字符上限")
+        if row["quote_repaired"] and row["original_quote"]:
+            original_content = [
+                s for s in split_segments(row["original_quote"]) if not is_placeholder(s)
+            ]
+            extra = _extra_content(row["source_quote"], original_content)
+            if extra:
+                failures.append(
+                    f"evidence {row['id']} 的修复引文卷入额外数字：{extra[:8]}")
 
     for ev_id in KNOWN_DEFECTIVE:
         row = conn.execute(
@@ -297,7 +350,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             log(f"⚠️ 无法修复 evidence {item['id']}：{item['reason']}")
 
         written = apply_repairs(conn, planned, dry_run=args.dry_run)
-        quarantined = quarantine(conn, dry_run=args.dry_run)
+        quarantined = quarantine(conn, unfixable, dry_run=args.dry_run)
         log(f"已重写引文 {written} 条，已隔离 {quarantined} 条")
 
         if args.dry_run:

@@ -49,6 +49,10 @@ from cninfo_queries import (  # noqa: E402
     recent_periods,
     search_chunks,
 )
+from repair_evidence_quotes import (  # noqa: E402
+    MAX_REPAIRED_QUOTE_CHARS,
+    _extra_content,
+)
 
 #: 真实踩过的坑：第 10 页既有 `332,583,883.61`，也有 `271,707,663.51` 等
 INTERLEAVED_PAGE = """思看科技（杭州）股份有限公司2024 年年度报告
@@ -407,7 +411,7 @@ class TestQuoteRepair(unittest.TestCase):
     """引文修复：把表格行拼接重写成页面上真实连续的原文。
 
     这是"后端严格核验能否通过"的关键 —— 修复后引文必须是标注页的连续子串，
-    且覆盖原引文的全部内容片段，不引入任何新内容。
+    且覆盖原引文的全部内容片段，不引入原引文之外的数字。
     """
 
     #: 行列顺序与 PDF 抽取顺序一致的表格（可以修成连续原文）
@@ -471,6 +475,29 @@ class TestQuoteRepair(unittest.TestCase):
         self.assertTrue(is_contiguous_quote(span, self.NEIGHBOUR_PAGE))
         self.assertNotIn("120,527,578.92", span)
         self.assertNotIn("114,254,997.25", span)
+
+    def test_extra_content_compares_canonical_numbers(self):
+        original = ["营业收入", "332,583,883.61", "271,707,663.51", "22.41"]
+        same = "营业收入\n332,583,883.61\n271,707,663.51\n22.41"
+        polluted = same + "\n归母净利润 120,527,578.92"
+        self.assertEqual(_extra_content(same, original), [])
+        self.assertEqual(_extra_content(polluted, original), ["120,527,578.92"])
+
+    def test_evidence_3091_does_not_absorb_neighbouring_table_numbers(self):
+        """真实回归：3091 的净利润摘录不能吞入营业收入、成本和税金数字。"""
+        original = ["归属于上市公司股东的净利润", "52,840,640.11", "114,500,854.73"]
+        polluted_span = (
+            "营业收入 150,248,052.96\n营业成本 102,468,674.22\n"
+            "税金及附加 1,698,358.08\n归属于上市公司股东的净利润 "
+            "52,840,640.11 114,500,854.73"
+        )
+        extras = _extra_content(polluted_span, original)
+        self.assertIn("150,248,052.96", extras)
+        self.assertIn("102,468,674.22", extras)
+        self.assertIn("1,698,358.08", extras)
+
+    def test_quote_length_limit_matches_backend(self):
+        self.assertEqual(MAX_REPAIRED_QUOTE_CHARS, 200)
 
     def test_extract_span_keeps_range_segment_intact(self):
         page = "营业收入 33,000-35,000 27,170.77 21.45%-28.81%\n"

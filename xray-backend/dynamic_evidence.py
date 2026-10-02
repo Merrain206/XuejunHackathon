@@ -723,6 +723,7 @@ def _fetch_rows(stock_code: str) -> list[sqlite3.Row]:
     with db.connect() as con:
         db._ensure_docs_table(con)
         doc_cols = db._columns(con, "docs")
+        evidence_cols = db._columns(con, "evidence")
         select_extra = ["d.file_name", "d.page_count"]
         for name in ("source_url", "parse_status", "superseded", "report_period", "published_at"):
             if name in doc_cols:
@@ -731,6 +732,8 @@ def _fetch_rows(stock_code: str) -> list[sqlite3.Row]:
         where = "e.company_code = ?"
         if extended:
             where += " AND " + _doc_filter_sql()
+        if "excluded" in evidence_cols:
+            where += " AND COALESCE(e.excluded, 0) = 0"
         sql = (
             "SELECT e.id AS evidence_id, e.company_code, e.document_id, e.category, "
             "       e.metric, e.period, e.content, e.source_page, e.source_quote, "

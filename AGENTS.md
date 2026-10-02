@@ -22,5 +22,6 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 思看科技 `suggested_questions` 保持原四条和固定顺序；其他公司可以使用已确认的通用财务问题，但不得由模型自由生成或推荐无证据覆盖的问题。
 - 非思看公司的 API 失败时不得降级到思看科技 Mock；只能显示证据不足或服务不可用，避免跨公司事实污染。
 - 三条并行任务书见 `docs/TONIGHT_FRONTEND_TASKS.md`、`docs/TONIGHT_BACKEND_TASKS.md`、`docs/TONIGHT_DATABASE_TASKS.md`；实现状态以 `docs/HANDOFF.md` 为准，不得把任务书目标直接描述成已完成功能。
+- 数据库与动态后端合并后的收口要求见 `docs/SUPPLEMENTAL_DATABASE_BACKEND_TASKS.md`：后端必须过滤 `evidence.excluded=1`，Claim/Signal 的数字只能由其自身引用的 Evidence 支撑，不能用全部候选语料交叉兜底。
 - V0.2 的夜间更新、Snapshot、维护模式是目标架构，目前尚未在此前端实现；不要把规划写成已完成功能。
 - 交接现状、运行方法、关键文件和后续事项见 `docs/HANDOFF.md`。

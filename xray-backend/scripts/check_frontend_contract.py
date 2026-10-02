@@ -337,4 +337,4 @@ if FAILURES:
     for f in FAILURES:
         print(f"  - {f}")
     sys.exit(1)
-print("响应体与前端契约完全一致 ✅")
+print("响应体与前端契约完全一致 [PASS]")

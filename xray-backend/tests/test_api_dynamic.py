@@ -187,6 +187,12 @@ def test_fabricated_quote_evidence_rejected(extended_db):
         assert "888,888,888.88" not in candidate.source_quote
 
 
+def test_database_excluded_evidence_never_enters_candidates(extended_db):
+    """即使页码和引文都合法，excluded=1 也必须在 SQL 层被过滤。"""
+    candidates = de.retrieve_candidates("600570", Q_REVENUE)
+    assert all("176,848,509.44" not in candidate.raw_quote for candidate in candidates)
+
+
 def test_all_returned_quotes_are_contiguous_page_text(extended_db):
     """返回的 source_quote 必须是所引页面上的**连续原文**（能被直接搜到）。"""
     import db

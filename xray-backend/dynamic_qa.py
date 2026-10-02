@@ -311,7 +311,7 @@ def validate_dynamic_payload(
     max_evidence: int | None = None,
     max_claims: int | None = None,
     max_signals: int | None = None,
-    strict_numbers: bool = False,
+    strict_numbers: bool = True,
 ) -> tuple[dict[str, Any], list[str]]:
     """把模型输出**收敛成**可返回的结构，并返回被丢弃的原因。
 
@@ -320,8 +320,8 @@ def validate_dynamic_payload(
       1. 每条 claim / signal 至少引用一条本次候选证据；
       2. 引用的 id 必须存在于本次候选集合（悬空 id → 丢弃该条）；
       3. 页码与链接不由模型提供（候选已被机械核验过），因此不会被模型污染；
-      4~6. 数字必须能在被引用证据的原文摘录里核到（`strict_numbers=True` 时为硬失败，
-           默认只在日志里告警 —— 与稳定三问的口径一致）；
+      4~6. Claim / Signal 的数字必须能在它自己引用的 Evidence 原文里核到；
+           动态正式链路默认硬校验，不能从未引用候选中借用数字；
       7. 丢弃后没有 claim 且没有 signal → 整次证据不足；
       8. 模型不得使用候选之外的公司事实（规则 2 的必然结果）。
 
@@ -405,6 +405,36 @@ def validate_dynamic_payload(
         else:
             notes.append("模型没有给出任何带有效证据的 claim/signal，整次按证据不足处理")
             return _insufficient_payload(), notes
+
+    if strict_numbers:
+        verified_claims: list[dict[str, Any]] = []
+        for entry in claims:
+            missing = _numbers_unsupported_by_references(entry["text"], entry["evidence_ids"], by_id)
+            if missing:
+                notes.append(
+                    f"claim {entry['id']} 的数字未被其引用 Evidence 支撑，已丢弃：{missing}"
+                )
+                continue
+            verified_claims.append(entry)
+        claims = verified_claims
+
+        verified_signals: list[dict[str, Any]] = []
+        for entry in signals:
+            signal_text = f"{entry['title']} {entry['description']}"
+            missing = _numbers_unsupported_by_references(
+                signal_text, entry["evidence_ids"], by_id
+            )
+            if missing:
+                notes.append(
+                    f"signal {entry['id']} 的数字未被其引用 Evidence 支撑，已丢弃：{missing}"
+                )
+                continue
+            verified_signals.append(entry)
+        signals = verified_signals
+
+        if not claims and not signals:
+            notes.append("逐条引用数字校验后没有剩余 claim/signal，整次按证据不足处理")
+            return _insufficient_payload(), notes
     if answer.strip() == INSUFFICIENT_ANSWER or not answer:
         answer = _answer_from_claims(claims)
 
@@ -417,35 +447,53 @@ def validate_dynamic_payload(
                     used.append(ev_id)
     selected = [by_id[ev_id] for ev_id in used[:max_evidence]]
 
-    # 被 max_evidence 截掉的 id 不能再留在 claims/signals 里（否则引用了不存在的证据）
+    # 被 max_evidence 截掉的 id 不能再留在 claims/signals 里。删掉引用后必须再做
+    # 一次逐条数字核验，防止结论依赖的恰好是被截掉的那条 Evidence。
     kept = {c.id for c in selected}
     claims = [_drop_dangling(entry, kept) for entry in claims]
     signals = [_drop_dangling(entry, kept) for entry in signals]
     claims = [entry for entry in claims if entry["evidence_ids"]]
     signals = [entry for entry in signals if entry["evidence_ids"]]
+    if strict_numbers:
+        claims = [
+            entry for entry in claims
+            if not _numbers_unsupported_by_references(
+                entry["text"], entry["evidence_ids"], by_id
+            )
+        ]
+        signals = [
+            entry for entry in signals
+            if not _numbers_unsupported_by_references(
+                f"{entry['title']} {entry['description']}", entry["evidence_ids"], by_id
+            )
+        ]
     if not claims and not signals:
         notes.append("证据被上限截断后没有剩余引用，整次按证据不足处理")
         return _insufficient_payload(), notes
 
-    # 数字核对用的语料 = **原始引文全文**（`raw_quote`），不是响应里的展示摘录。
-    #
-    # ⚠️ 展示摘录是从页面原文里截的**连续片段**（为了可读、也为了能逐字验证），
-    #    它可能只覆盖前两三个数字，而模型引用的数字完全可能来自同一行的后面几列。
-    #    实测：answer 里写「同比下降14.44%」被报"未能核到"，其实 14.44 就在
-    #    该证据行的原始引文里 —— 是摘录截断造成的**假告警**。
-    #    用原始引文核对，既不会漏判，也不会冤枉模型。
-    corpus = _quote_corpus(
-        [{"source_quote": c.raw_quote or c.display_quote or c.source_quote} for c in candidates]
-    )
-    for entry in claims:
-        missing = _numbers_supported(entry["text"], corpus)
-        if missing:
-            notes.append(f"claim {entry['id']} 的数字未能核到：{missing}")
+    # 去掉因整条 Claim/Signal 被截断而变成孤儿的 Evidence。
+    active_ids = {
+        ev_id
+        for group in (claims, signals)
+        for entry in group
+        for ev_id in entry["evidence_ids"]
+    }
+    selected = [candidate for candidate in selected if candidate.id in active_ids]
+
+    # Answer 没有独立的 evidence_ids，只能使用最终返回的 Evidence 数字并集。
+    # 若模型 Answer 带入了其它候选或编造数字，用已经逐条核验的 Claim 重建；
+    # 没有 Claim 可以重建时，整次拒答。
+    corpus = _quote_corpus([
+        {"source_quote": c.raw_quote or c.display_quote or c.source_quote}
+        for c in selected
+    ])
     missing_answer = _numbers_supported(answer, corpus)
     if missing_answer:
-        notes.append(f"answer 的数字未能核到：{missing_answer}")
-    if strict_numbers and (notes and any("未能核到" in n for n in notes)):
-        return _insufficient_payload(), notes
+        notes.append(f"answer 的数字未被最终返回 Evidence 支撑：{missing_answer}")
+        if claims:
+            answer = _answer_from_claims(claims)
+        else:
+            return _insufficient_payload(), notes
 
     return (
         {
@@ -483,6 +531,20 @@ _INSUFFICIENT_MARKERS = (
 _SENTENCE_SPLIT_RE = re.compile(r"[。；;\n]+")
 #: 句子里引用的候选编号（EV-001 / EV-001、EV-002 / EV-001,EV-002）
 _EVIDENCE_REF_RE = re.compile(r"EV-\d{1,4}")
+
+
+def _numbers_unsupported_by_references(
+    text: str,
+    evidence_ids: Sequence[str],
+    by_id: dict[str, Candidate],
+) -> list[str]:
+    """只用条目自己引用的 Evidence 核验金额和比例。"""
+    referenced = [by_id[ev_id] for ev_id in evidence_ids if ev_id in by_id]
+    corpus = _quote_corpus([
+        {"source_quote": c.raw_quote or c.display_quote or c.source_quote}
+        for c in referenced
+    ])
+    return _numbers_supported(text, corpus)
 
 
 def _is_insufficient_answer(answer: str) -> bool:
@@ -532,11 +594,6 @@ def _coerce_answer_into_claims(
             continue
         ids = [i for i in _EVIDENCE_REF_RE.findall(sentence) if i in by_id]
         if not ids:
-            # 模型写结论时**经常忘记带编号**（实测：同一段里引用了正确数字，
-            # 却一个 EV-xxx 都不写）。这时用「句子里的数字能在哪些候选摘录里核到」
-            # 把证据**机械地**绑回去 —— 绑不上就不生成 claim（不猜）。
-            ids = _bind_evidence_by_numbers(sentence, by_id)
-        if not ids:
             continue
         unique_ids: list[str] = []
         for ev_id in ids:
@@ -558,41 +615,6 @@ def _coerce_answer_into_claims(
         return None
     notes.append(f"模型未按格式给出 claims，已从 answer 的引用句机械转换出 {len(claims)} 条")
     return claims, notes
-
-
-#: 句子里的数字（含小数/千分位/百分号），用于回绑证据
-_SENTENCE_NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?%?")
-#: 回绑时忽略的短数字（1~2 位、以及年份）：它们在多处出现，绑不准
-_BIND_MIN_CHARS = 3
-
-
-def _bind_evidence_by_numbers(sentence: str, by_id: dict[str, Candidate]) -> list[str]:
-    """用句子里的数字，把证据**机械地**绑回去。
-
-    做法：把句子里的数字（去逗号、去百分号）与每个候选摘录里的数字集合求交，
-    命中的候选就是这条句子的可能出处。
-
-    **只返回数字确实在候选摘录里逐字出现过的那一条**（取排序最靠前的，即最相关/最新）。
-    绑不上就返回空列表 —— 宁可不生成 claim，也不给它随便安一个出处。
-
-    ⚠️ 这不是"让模型猜出处"，而是反过来：出处只能来自候选集合，
-       模型说什么数字、就配哪个候选，全程由后端决定。
-    """
-    numbers = {
-        token.replace(",", "").rstrip("%")
-        for token in _SENTENCE_NUMBER_RE.findall(sentence)
-        if len(token.replace(",", "").rstrip("%")) >= _BIND_MIN_CHARS
-        and not re.fullmatch(r"(19|20)\d{2}", token.replace(",", ""))
-    }
-    if not numbers:
-        return []
-
-    for candidate in by_id.values():
-        haystack = (candidate.raw_quote or candidate.source_quote or "").replace(",", "")
-        haystack = haystack.replace(" ", "")
-        if any(number in haystack for number in numbers):
-            return [candidate.id]
-    return []
 
 
 def _normalize_evidence(candidate: Candidate) -> dict[str, Any]:
