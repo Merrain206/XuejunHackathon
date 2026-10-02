@@ -1,7 +1,10 @@
-import { demoSuggestedQuestions, mockAsk } from "./mock-data";
+import { demoSuggestedQuestions, generalSuggestedQuestions } from "./companies";
+import { mockAsk } from "./mock-data";
 import type { AskResponse } from "./types";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
+const apiTimeoutMs = 45_000;
+const insufficientAnswer = "根据目前掌握的信息，我无法可靠回答这个问题。";
 
 type AskApiResponse = {
   answer: string;
@@ -34,6 +37,7 @@ type AskApiResponse = {
     source_page: number;
     source_quote: string;
     source_url: string;
+    verification_status?: "verified" | "auto" | "pending";
   }>;
   suggested_questions?: string[];
 };
@@ -60,7 +64,7 @@ function isHttpUrl(value: unknown): value is string {
   if (!isNonEmptyString(value)) return false;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
+    return (url.protocol === "https:" || url.protocol === "http:") && url.hash === "";
   } catch {
     return false;
   }
@@ -123,7 +127,8 @@ function isEvidence(value: unknown): value is AskApiResponse["evidence"][number]
     && Number.isInteger(value.source_page)
     && value.source_page > 0
     && isNonEmptyString(value.source_quote)
-    && isHttpUrl(value.source_url);
+    && isHttpUrl(value.source_url)
+    && (value.verification_status === undefined || ["verified", "auto", "pending"].includes(value.verification_status as string));
 }
 
 function isAskApiResponse(value: unknown): value is AskApiResponse {
@@ -151,17 +156,32 @@ function isAskApiResponse(value: unknown): value is AskApiResponse {
   return references.every((ids) => ids.every((id) => evidenceIds.has(id)));
 }
 
-export async function askCompany(companyId: string, question: string): Promise<AskResponse> {
+function unavailableResponse(): AskResponse {
+  return {
+    sourceMode: "unavailable",
+    answer: insufficientAnswer,
+    claims: [],
+    signals: [],
+    charts: [],
+    evidence: [],
+    suggestedQuestions: generalSuggestedQuestions,
+  };
+}
+
+export async function askCompany(companyId: string, question: string, signal?: AbortSignal): Promise<AskResponse> {
   if (!apiBaseUrl) {
-    return mockAsk(question);
+    return companyId === "688583" ? mockAsk(question) : unavailableResponse();
   }
+
+  const timeoutSignal = AbortSignal.timeout(apiTimeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
   try {
     const response = await fetch(`${apiBaseUrl}/companies/${companyId}/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
-      signal: AbortSignal.timeout(8000),
+      signal: requestSignal,
     });
 
     if (!response.ok) {
@@ -208,10 +228,14 @@ export async function askCompany(companyId: string, question: string): Promise<A
         sourcePage: item.source_page,
         sourceQuote: item.source_quote,
         sourceUrl: item.source_url,
+        verificationStatus: item.verification_status,
       })),
-      suggestedQuestions: demoSuggestedQuestions,
+      suggestedQuestions: companyId === "688583"
+        ? demoSuggestedQuestions
+        : (data.suggested_questions?.length ? data.suggested_questions : generalSuggestedQuestions),
     };
   } catch {
-    return mockAsk(question, 0, "fallback");
+    if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+    return companyId === "688583" ? mockAsk(question, 0, "fallback") : unavailableResponse();
   }
 }

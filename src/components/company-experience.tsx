@@ -1,16 +1,11 @@
 "use client";
 
-import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { askCompany } from "@/lib/api";
-import { company } from "@/lib/mock-data";
+import { companies, type Company } from "@/lib/companies";
 import type { AskResponse, Evidence } from "@/lib/types";
 import { EvidenceChart } from "./evidence-chart";
-
-const starterQuestions = [
-  "你的收入结构发生了什么变化？",
-  "你最近真的赚钱吗？",
-  "目前最值得关注的风险是什么？",
-];
 
 const loadingSteps = [
   { title: "正在理解用户问题", detail: "识别查询对象与信息范围" },
@@ -68,7 +63,7 @@ function EvidenceRichText({ text, evidence, onEvidence }: { text: string; eviden
   return content;
 }
 
-function getEvidenceReliability(item: Evidence): {
+function getEvidenceReliability(item: Evidence, companyId: string): {
   level: ReliabilityLevel;
   label: string;
   reasons: { state: ReliabilityReasonState; text: string }[];
@@ -76,7 +71,9 @@ function getEvidenceReliability(item: Evidence): {
   let isOfficialSource = false;
   try {
     const sourceUrl = new URL(item.sourceUrl);
-    isOfficialSource = sourceUrl.protocol === "https:" && (sourceUrl.hostname === "sse.com.cn" || sourceUrl.hostname.endsWith(".sse.com.cn"));
+    isOfficialSource = sourceUrl.protocol === "https:" && ["sse.com.cn", "cninfo.com.cn"].some(
+      (domain) => sourceUrl.hostname === domain || sourceUrl.hostname.endsWith(`.${domain}`),
+    );
   } catch {
     isOfficialSource = false;
   }
@@ -88,24 +85,37 @@ function getEvidenceReliability(item: Evidence): {
     ? contentValues.every((value) => findSupportingEvidence(value, [item]))
     : null;
 
-  const level: ReliabilityLevel = isOfficialSource && hasPrecisePage && hasSourceQuote && numericMatch !== false
-    ? "high"
-    : [isOfficialSource, hasPrecisePage, hasSourceQuote].filter(Boolean).length >= 2
-      ? "medium"
-      : "pending";
+  const evidenceChainComplete = isOfficialSource && hasPrecisePage && hasSourceQuote && numericMatch !== false;
+  const level: ReliabilityLevel = item.verificationStatus === "pending" || !evidenceChainComplete
+    ? "pending"
+    : item.verificationStatus === "verified"
+      ? "high"
+      : item.verificationStatus === "auto" || companyId !== "688583"
+        ? "medium"
+        : "high";
+
+  const verificationReason = item.verificationStatus === "verified"
+    ? { state: "verified" as const, text: "后端标记为已核验 Evidence" }
+    : item.verificationStatus === "auto"
+      ? { state: "neutral" as const, text: "原文与页码已由后端机械核验，未标记人工复核" }
+      : item.verificationStatus === "pending"
+        ? { state: "warning" as const, text: "后端标记为待核验 Evidence" }
+        : companyId === "688583"
+          ? { state: "verified" as const, text: "思看科技演示证据已人工核验" }
+          : { state: "neutral" as const, text: "动态 Evidence 未标记人工核验，最高按中可靠度处理" };
 
   return {
     level,
     label: level === "high" ? "高" : level === "medium" ? "中" : "待核验",
     reasons: [
-      { state: isOfficialSource ? "verified" : "warning", text: isOfficialSource ? "来自上交所官方披露文件" : "来源不是已识别的上交所官方地址" },
+      { state: isOfficialSource ? "verified" : "warning", text: isOfficialSource ? "来自上交所或巨潮资讯官方披露地址" : "来源不是已识别的官方披露地址" },
       { state: hasPrecisePage ? "verified" : "warning", text: hasPrecisePage ? `精确定位至 PDF 第 ${String(item.sourcePage)} 页` : "缺少可核查的 PDF 页码" },
       { state: hasSourceQuote ? "verified" : "warning", text: hasSourceQuote ? "保留可核对的原文摘录" : "缺少可核对的原文摘录" },
       {
         state: numericMatch === null ? "neutral" : numericMatch ? "verified" : "warning",
         text: numericMatch === null ? "该证据摘要不含需逐项核对的金额或比例" : numericMatch ? "摘要中的关键数字与原文一致" : "摘要中的关键数字未全部在原文中匹配",
       },
-      { state: "neutral", text: "尚未标记独立来源交叉验证" },
+      verificationReason,
     ],
   };
 }
@@ -126,8 +136,8 @@ function ScanMark() {
   );
 }
 
-function EvidenceDrawer({ item, onClose }: { item: Evidence; onClose: () => void }) {
-  const reliability = getEvidenceReliability(item);
+function EvidenceDrawer({ item, companyId, onClose }: { item: Evidence; companyId: string; onClose: () => void }) {
+  const reliability = getEvidenceReliability(item, companyId);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/30 backdrop-blur-[2px]">
@@ -171,8 +181,8 @@ function EvidenceDrawer({ item, onClose }: { item: Evidence; onClose: () => void
             <p className="mt-3 text-[11px] leading-5 text-slate-400">表格型原文按列整理以便阅读，未改动披露数值。</p>
           </div>
 
-          <a className="mt-6 flex items-center justify-between border-b border-slate-950 pb-3 text-sm font-semibold text-slate-950 transition-colors hover:text-teal-700" href={`${item.sourceUrl}#page=${item.sourcePage}`} target="_blank" rel="noreferrer">
-            打开上交所原始文件 <ArrowIcon direction="up" />
+          <a className="mt-6 flex items-center justify-between border-b border-slate-950 pb-3 text-sm font-semibold text-slate-950 transition-colors hover:text-teal-700" href={`${item.sourceUrl}${item.sourcePage ? `#page=${item.sourcePage}` : ""}`} target="_blank" rel="noreferrer">
+            打开官方原始文件 <ArrowIcon direction="up" />
           </a>
         </div>
       </aside>
@@ -204,7 +214,7 @@ function SignalCard({ response, onEvidence }: { response: AskResponse; onEvidenc
   );
 }
 
-export function CompanyExperience() {
+export function CompanyExperience({ company }: { company: Company }) {
   const [question, setQuestion] = useState("");
   const [askedQuestion, setAskedQuestion] = useState("");
   const [response, setResponse] = useState<AskResponse | null>(null);
@@ -213,12 +223,25 @@ export function CompanyExperience() {
   const [loadingStage, setLoadingStage] = useState(0);
   const [error, setError] = useState("");
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
+  const activeRequest = useRef<{ id: number; controller: AbortController } | null>(null);
+  const nextRequestId = useRef(0);
 
-  const metrics = useMemo(() => [
-    { label: "2023 主营业务收入", value: "2.72 亿", note: "招股书口径" },
-    { label: "便携式扫描仪占比", value: "57.87%", note: "2023" },
-    { label: "跟踪式产品占比", value: "26.58%", note: "2023" },
-  ], []);
+  useEffect(() => {
+    setQuestion("");
+    setAskedQuestion("");
+    setResponse(null);
+    setDataMode("pending");
+    setLoading(false);
+    setError("");
+    setSelectedEvidence(null);
+    activeRequest.current?.controller.abort();
+    activeRequest.current = null;
+
+    return () => {
+      activeRequest.current?.controller.abort();
+      activeRequest.current = null;
+    };
+  }, [company.id]);
 
   useEffect(() => {
     if (!loading) return;
@@ -239,14 +262,24 @@ export function CompanyExperience() {
     setLoading(true);
     setError("");
     setResponse(null);
+    setSelectedEvidence(null);
+    activeRequest.current?.controller.abort();
+    const controller = new AbortController();
+    const requestId = ++nextRequestId.current;
+    activeRequest.current = { id: requestId, controller };
     try {
-      const result = await askCompany(company.id, prompt);
+      const result = await askCompany(company.id, prompt, controller.signal);
+      if (activeRequest.current?.id !== requestId) return;
       setDataMode(result.sourceMode);
       setResponse(result);
     } catch {
+      if (controller.signal.aborted || activeRequest.current?.id !== requestId) return;
       setError("这次检索没有完成，请稍后重试。");
     } finally {
-      setLoading(false);
+      if (activeRequest.current?.id === requestId) {
+        activeRequest.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -260,27 +293,30 @@ export function CompanyExperience() {
       <header className="border-b border-slate-200/90 bg-[#f8faf7]">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12">
           <div className="flex items-center gap-3"><ScanMark /><div><p className="text-sm font-semibold tracking-tight">ASK THE COMPANY</p><p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Evidence intelligence</p></div></div>
-          <div className={`source-badge ${dataMode}`}><span className="status-dot" />{dataMode === "api" ? "LIVE API" : dataMode === "fallback" ? "DEMO FALLBACK" : dataMode === "mock" ? "DEMO DATA" : "等待首次提问"}</div>
+          <div className={`source-badge ${dataMode}`}><span className="status-dot" />{dataMode === "api" ? "LIVE API" : dataMode === "fallback" ? "DEMO FALLBACK" : dataMode === "mock" ? "DEMO DATA" : dataMode === "unavailable" ? "SERVICE UNAVAILABLE" : "等待首次提问"}</div>
         </div>
       </header>
 
       <div className="mx-auto grid max-w-[1440px] lg:grid-cols-[310px_minmax(0,1fr)]">
         <aside className="border-b border-slate-200 bg-[#eef1ed] px-5 py-7 sm:px-8 lg:min-h-[calc(100vh-64px)] lg:border-b-0 lg:border-r lg:px-8 lg:py-10">
+          <nav aria-label="切换公司" className="company-switcher">
+            {companies.map((item) => <Link aria-current={item.id === company.id ? "page" : undefined} className={`company-switcher-link ${item.id === company.id ? "is-active" : ""}`} href={`/company/${item.id}`} key={item.id}><span>{item.name}</span><span>{item.ticker}</span></Link>)}
+          </nav>
           <p className="eyebrow">Company dossier</p>
-          <div className="mt-5 flex items-start gap-4"><div className="company-monogram">S</div><div><h1 className="text-2xl font-semibold tracking-tight">{company.name}</h1><p className="mt-1 font-mono text-xs text-slate-500">SSE · {company.ticker}</p></div></div>
-          <div className="mt-8 flex flex-wrap gap-2"><span className="tag">科创板</span><span className="tag">已上市</span></div>
+          <div className="mt-5 flex items-start gap-4"><div className="company-monogram">{company.monogram}</div><div><h1 className="text-2xl font-semibold tracking-tight">{company.name}</h1><p className="mt-1 font-mono text-xs text-slate-500">{company.exchangeCode} · {company.ticker}</p></div></div>
+          <div className="mt-8 flex flex-wrap gap-2"><span className="tag">{company.exchange}</span><span className="tag">已上市</span></div>
 
           <dl className="mt-8 space-y-5 border-t border-slate-300 pt-6 text-sm">
             <div><dt className="text-xs text-slate-500">公司全称</dt><dd className="mt-1.5 leading-6 text-slate-800">{company.fullName}</dd></div>
             <div><dt className="text-xs text-slate-500">主营领域</dt><dd className="mt-1.5 leading-6 text-slate-800">{company.industry}</dd></div>
-            <div><dt className="text-xs text-slate-500">上市日期</dt><dd className="mt-1.5 font-mono text-slate-800">{company.listedAt}</dd></div>
+            {company.listedAt ? <div><dt className="text-xs text-slate-500">上市日期</dt><dd className="mt-1.5 font-mono text-slate-800">{company.listedAt}</dd></div> : null}
           </dl>
 
           <div className="mt-8 border-t border-slate-300 pt-6">
             <p className="eyebrow">Source coverage</p>
-            <div className="mt-4 flex items-center justify-between text-sm"><span className="text-slate-600">公开文件</span><span className="font-mono font-semibold">02</span></div>
-            <div className="mt-3 h-1 overflow-hidden bg-slate-300"><div className="h-full w-2/3 bg-teal-700" /></div>
-            <p className="mt-3 text-xs leading-5 text-slate-500">当前演示使用已核验的招股书与 2025 年半年度报告。</p>
+            <div className="mt-4 flex items-center justify-between text-sm"><span className="text-slate-600">公开文件</span><span className="font-mono font-semibold">{company.id === "688583" ? "02" : "READY"}</span></div>
+            <div className="mt-3 h-1 overflow-hidden bg-slate-300"><div className={`h-full bg-teal-700 ${company.id === "688583" ? "w-2/3" : "w-full"}`} /></div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">{company.id === "688583" ? "当前演示使用已核验的招股书与 2025 年半年度报告。" : "公司公告已收录，可通过动态 Evidence 服务检索并核验引用。"}</p>
           </div>
         </aside>
 
@@ -299,11 +335,11 @@ export function CompanyExperience() {
               </div>
             </form>
 
-            {!response && !loading ? <div className="mt-4 flex flex-wrap gap-2">{starterQuestions.map((item) => <button className="question-chip" key={item} onClick={() => void ask(item)} type="button">{item}</button>)}</div> : null}
+            {!response && !loading ? <div className="mt-4 flex flex-wrap gap-2">{company.suggestedQuestions.map((item) => <button className="question-chip" key={item} onClick={() => void ask(item)} type="button">{item}</button>)}</div> : null}
           </section>
 
           <section className="py-8">
-            {!response && !loading && !error ? <div className="grid gap-3 sm:grid-cols-3">{metrics.map((metric) => <div className="metric-card" key={metric.label}><p className="text-xs text-slate-500">{metric.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{metric.value}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-slate-400">{metric.note}</p></div>)}</div> : null}
+            {!response && !loading && !error ? <div className="grid gap-3 sm:grid-cols-3">{company.metrics.map((metric) => <div className="metric-card" key={metric.label}><p className="text-xs text-slate-500">{metric.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{metric.value}</p><p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-slate-400">{metric.note}</p></div>)}</div> : null}
 
             {loading ? <div className="loading-panel" role="status" aria-live="polite">
               <div className="scanner-line" />
@@ -326,6 +362,7 @@ export function CompanyExperience() {
 
             {response ? <div className="response-stack space-y-5">
               {response.sourceMode === "fallback" ? <div className="fallback-notice animate-rise"><span>!</span><p>后端暂时不可用，当前展示已核验的演示数据。</p></div> : null}
+              {response.sourceMode === "unavailable" ? <div className="unavailable-notice animate-rise"><span>!</span><p>动态证据服务暂时不可用，未使用其他公司的演示数据。</p></div> : null}
               <div className="animate-rise"><p className="eyebrow">Question</p><p className="mt-2 text-sm font-medium text-slate-700">“{askedQuestion}”</p></div>
               <SignalCard response={response} onEvidence={setSelectedEvidence} />
 
@@ -337,7 +374,7 @@ export function CompanyExperience() {
 
               {response.charts.map((chart) => <EvidenceChart chart={chart} key={chart.id} />)}
 
-              {response.evidence.length ? <section className="animate-rise"><div className="mb-3 flex items-center justify-between"><p className="eyebrow">Evidence trail</p><span className="font-mono text-[10px] text-slate-400">{response.evidence.length} ITEMS</span></div><div className="grid gap-3 xl:grid-cols-3">{response.evidence.map((item) => { const reliability = getEvidenceReliability(item); return <button className="evidence-card" key={item.id} onClick={() => setSelectedEvidence(item)}><div className="flex items-center justify-between gap-3"><span className="font-mono text-[10px] font-semibold text-teal-700">{item.id}</span><span className={`reliability-badge ${reliability.level}`}>可靠度 · {reliability.label}</span></div><p className="mt-5 text-left text-sm font-medium leading-6 text-slate-800">{item.content}</p><div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-400"><span>{item.period}</span><span className="flex items-center gap-1 text-slate-700">{item.sourcePage ? `P. ${item.sourcePage}` : "页码待核验"} · 查看原因 <ArrowIcon /></span></div></button>; })}</div></section> : null}
+              {response.evidence.length ? <section className="animate-rise"><div className="mb-3 flex items-center justify-between"><p className="eyebrow">Evidence trail</p><span className="font-mono text-[10px] text-slate-400">{response.evidence.length} ITEMS</span></div><div className="grid gap-3 xl:grid-cols-3">{response.evidence.map((item) => { const reliability = getEvidenceReliability(item, company.id); return <button className="evidence-card" key={item.id} onClick={() => setSelectedEvidence(item)}><div className="flex items-center justify-between gap-3"><span className="font-mono text-[10px] font-semibold text-teal-700">{item.id}</span><span className={`reliability-badge ${reliability.level}`}>可靠度 · {reliability.label}</span></div><p className="mt-5 text-left text-sm font-medium leading-6 text-slate-800">{item.content}</p><div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-400"><span>{item.period}</span><span className="flex items-center gap-1 text-slate-700">{item.sourcePage ? `P. ${item.sourcePage}` : "页码待核验"} · 查看原因 <ArrowIcon /></span></div></button>; })}</div></section> : null}
 
               {response.suggestedQuestions.length ? <section className="animate-rise pt-2"><p className="eyebrow">You may also want to ask</p><div className="mt-3 flex flex-wrap gap-2">{response.suggestedQuestions.map((item) => <button className="question-chip" key={item} onClick={() => void ask(item)}>{item}</button>)}</div></section> : null}
             </div> : null}
@@ -345,7 +382,7 @@ export function CompanyExperience() {
         </div>
       </div>
 
-      {selectedEvidence ? <EvidenceDrawer item={selectedEvidence} onClose={() => setSelectedEvidence(null)} /> : null}
+      {selectedEvidence ? <EvidenceDrawer companyId={company.id} item={selectedEvidence} onClose={() => setSelectedEvidence(null)} /> : null}
     </main>
   );
 }

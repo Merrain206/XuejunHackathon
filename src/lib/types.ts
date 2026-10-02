@@ -7,6 +7,7 @@ export type Evidence = {
   sourcePage?: number;
   sourceQuote: string;
   sourceUrl: string;
+  verificationStatus?: "verified" | "auto" | "pending";
 };
 
 export type Claim = {
@@ -36,7 +37,7 @@ export type ChartSpec = {
 };
 
 export type AskResponse = {
-  sourceMode: "api" | "mock" | "fallback";
+  sourceMode: "api" | "mock" | "fallback" | "unavailable";
   answer: string;
   claims: Claim[];
   signals: Signal[];

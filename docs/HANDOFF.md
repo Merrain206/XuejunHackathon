@@ -6,7 +6,7 @@
 
 ## 1. 项目目标
 
-Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；产品负责人已确认今晚尝试扩展到 `cninfo.db` 内四家公司与动态证据问答。
+Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；前端已能承载 `cninfo.db` 内四家公司，动态证据问答成功链路仍依赖后端与数据库任务。
 
 最高原则：`No Evidence, No Claim`。证据不足时固定回答：
 
@@ -16,19 +16,22 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 
 ## 2. 当前已经完成
 
-> 本节只描述已经完成并验收的能力。四家公司切换和动态 LLM 问答尚在实施，不能视为现状。
+> 本节只描述已经完成并验收的能力。动态 LLM 问答尚未完成端到端验收，不能视为稳定现状。
 
 - Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 前端。
-- 公司页路由：`/company/688583`，根路径自动跳转过去。
-- 公司固定为思看科技（688583，上交所科创板）。
+- 公司页路由：`/company/{id}`，根路径自动跳转到 `/company/688583`。
+- 支持思看科技（688583）、恒生电子（600570）、中国长城（000066）和贝达药业（300558）切换；公司目录集中在 `src/lib/companies.ts`。
+- 未知公司代码显示明确的不支持状态，不会套用思看科技数据。
+- 切换公司会清空问题、回答、加载状态和 Evidence 抽屉，并取消旧请求，避免迟到响应串台。
 - 提问输入、分阶段加载动画、Answer、Claim、X-Ray Signal、ECharts、Evidence 列表和 Evidence 抽屉。
 - Claim 和 Signal 中的 Evidence ID 均可点击并打开对应证据。
 - 3 个问题对应 3 套独立回答，不再复用同一段总结。
 - 后端适配器把 FastAPI snake_case 响应转换成前端 camelCase 类型。
-- 未配置后端时使用 Mock；后端超时、HTTP 错误或 JSON 解析失败时自动切换已核验演示数据，并显示 `DEMO FALLBACK`。
+- 思看科技未配置后端时使用 Mock；后端超时、HTTP 错误或 JSON 解析失败时自动切换已核验演示数据，并显示 `DEMO FALLBACK`。
+- 其他三家公司不使用思看科技 Mock；动态服务不可用时返回证据不足结构并显示 `SERVICE UNAVAILABLE`。
 - 未准备的问题返回证据不足回答，不伪造公司事实。
-- 数字高亮、Evidence 可靠度等级与原因说明已经完成。
-- FastAPI 响应具有最小运行时校验，非法结构会自动降级为已核验 Demo 数据。
+- 数字高亮、Evidence 可靠度等级与原因说明已经完成；官方来源识别覆盖上交所与巨潮资讯，可选 `verification_status` 支持 `verified`、`auto`、`pending`。
+- FastAPI 响应具有最小运行时校验；非法结构在思看科技降级为已核验 Demo，其他公司进入服务不可用状态。
 - 后端三条确定性回答、真实 SQLite 只读访问、上交所权威来源和四问样例已经接入代码库。
 
 ## 3. 稳定 Demo 脚本
@@ -96,7 +99,9 @@ Content-Type: application/json
 }
 ```
 
-`sourceMode: "api" | "mock" | "fallback"` 由前端适配层添加，后端无需返回。不要让后端直接生成 ECharts JavaScript，只返回语义图表数据。
+`sourceMode: "api" | "mock" | "fallback" | "unavailable"` 由前端适配层添加，后端无需返回。不要让后端直接生成 ECharts JavaScript，只返回语义图表数据。
+
+Evidence 可选返回 `verification_status: "verified" | "auto" | "pending"`；字段出现时前端会校验枚举值。
 
 `source_url` 必须是没有 `#page=` fragment 的裸 PDF URL；`source_page` 独立返回，由前端在打开原文时统一追加页码锚点。
 
@@ -104,8 +109,9 @@ Content-Type: application/json
 
 - `src/components/company-experience.tsx`：公司页主体、提问状态、加载步骤、Answer/Signal/Evidence 交互。
 - `src/components/evidence-chart.tsx`：ECharts 渲染，支持正负值范围。
+- `src/lib/companies.ts`：四家公司资料、首页指标和推荐问题的单一来源。
 - `src/lib/mock-data.ts`：三套 Demo 回答、真实证据和问题路由。
-- `src/lib/api.ts`：FastAPI 请求、8 秒超时、字段转换和失败降级。
+- `src/lib/api.ts`：FastAPI 请求、45 秒超时、字段转换和按公司隔离的失败降级。
 - `src/lib/types.ts`：前端统一数据类型。
 - `src/app/globals.css`：页面样式和动画。
 - `README.md`：启动方法与接口示例。
@@ -118,7 +124,7 @@ npm install
 npm run dev
 ```
 
-打开 `http://localhost:3000/company/688583`。
+打开 `http://localhost:3000/company/688583`，再使用左侧入口切换四家公司。
 
 真实后端地址通过 `.env.local` 配置：
 
@@ -146,7 +152,7 @@ python -m pytest tests_real -q     # 54 passed（真实库）
 2026-10-02 后端联调轮验证结果：四条问题全部 HTTP 200；三条稳定回答互不相同且各带
 收入结构与盈利质量各带 1 个图表，风险问题无图表；未知问题返回固定兜底
 且四个数组全空；所有证据均为上交所 HTTPS 裸 PDF URL，页码由前端追加；单条回答耗时
-约 70–90 ms（远低于前端 8 秒超时）。
+约 70–90 ms（远低于前端 45 秒超时）。
 
 提交前至少运行：
 
@@ -154,7 +160,7 @@ python -m pytest tests_real -q     # 54 passed（真实库）
 npm run build
 ```
 
-2026-10-02 验证结果：构建通过；模拟后端不可达时，3 个问题均返回不同答案，8 个 Claim 的 Evidence 均可点击，Evidence 抽屉正常，浏览器运行时错误为 0。
+2026-10-02 验证结果：构建通过；四家公司切换、未知代码状态、切换清理和非思看公司断网隔离已完成人工验收。思看科技 3 个问题均返回不同答案，8 个 Claim 的 Evidence 均可点击，Evidence 抽屉正常，浏览器运行时错误为 0。动态 API 成功链路仍待后端与数据库任务完成后联调。
 
 ## 8. V0.2 架构：规划而非现状
 
@@ -164,10 +170,10 @@ npm run build
 
 ## 9. 下一步优先级
 
-1. 按三份今晚任务书并行完成四家公司切换、动态证据问答和四公司数据质量核验。
+1. 完成后端动态证据问答与四公司数据质量核验，再执行前后端成功链路联调。
 2. 保持思看科技确定性三问及其 Mock/Fallback 不退化，作为动态链路失败时的稳定 Demo。
 3. 动态问答采用“先检索候选 Evidence，再让模型组织答案，最后机械校验”的最小方案；第一版不要求图表。
-4. 距离截止不足 8 小时时停止扩范围，执行四公司全流程验收并决定动态能力是否进入正式演示。
+4. 后端就绪后验证四家公司 Answer、Claim、Signal、Evidence 与 `charts: []`，并确认无跨公司引用。
 
 需要用户决策的问题：真实后端契约发生变化、是否启用维护模式、是否牺牲 Demo 稳定性增加新功能。不要擅自扩大范围。
 

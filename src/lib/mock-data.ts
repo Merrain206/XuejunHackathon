@@ -1,26 +1,10 @@
 import type { AskResponse, Evidence } from "./types";
-
-export const company = {
-  id: "688583",
-  name: "思看科技",
-  fullName: "思看科技（杭州）股份有限公司",
-  ticker: "688583",
-  exchange: "上交所科创板",
-  industry: "工业级 3D 视觉数字化",
-  listedAt: "2025-01-15",
-};
+import { demoSuggestedQuestions } from "./companies";
 
 const prospectusUrl =
   "https://static.sse.com.cn/stock/disclosure/announcement/c/202408/001845_20240816_R2YE.pdf";
 const halfYearReportUrl =
   "https://static.sse.com.cn/disclosure/listedinfo/announcement/c/new/2025-08-28/688583_20250828_9F77.pdf";
-
-export const demoSuggestedQuestions = [
-  "你的收入结构发生了什么变化？",
-  "你最近真的赚钱吗？",
-  "目前最值得关注的风险是什么？",
-  "你的员工喜欢吃水果吗？",
-];
 
 const structureEvidence: Evidence[] = [
   {
