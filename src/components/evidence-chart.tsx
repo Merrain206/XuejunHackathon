@@ -19,6 +19,9 @@ export function EvidenceChart({ chart }: { chart: ChartSpec }) {
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const values = chart.series.flatMap((series) => series.values);
+    const minValue = Math.floor(Math.min(0, ...values) / 10) * 10;
+    const maxValue = Math.ceil(Math.max(0, ...values) / 10) * 10 || 10;
     const instance = echarts.init(containerRef.current, undefined, { renderer: "canvas" });
     instance.setOption({
       animationDuration: 900,
@@ -49,20 +52,25 @@ export function EvidenceChart({ chart }: { chart: ChartSpec }) {
       },
       yAxis: {
         type: "value",
-        min: 0,
-        max: 100,
-        interval: 25,
+        min: minValue,
+        max: maxValue,
         axisLabel: { color: "#6b787a", fontSize: 10, formatter: `{value}${chart.unit}` },
         splitLine: { lineStyle: { color: "#e5ebe8", type: "dashed" } },
       },
-      series: chart.series.map((series) => ({
+      series: chart.series.map((series, index) => ({
         name: series.name,
         type: "line",
         data: series.values,
-        smooth: 0.25,
+        smooth: 0.4,
         symbol: "circle",
-        symbolSize: 7,
-        lineStyle: { width: 2.5 },
+        symbolSize: 8,
+        lineStyle: { width: 3 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: index === 0 ? "rgba(18, 60, 58, 0.18)" : "rgba(211, 154, 45, 0.18)" },
+            { offset: 1, color: "rgba(255, 255, 255, 0)" },
+          ]),
+        },
         emphasis: { focus: "series" },
         label: {
           show: true,

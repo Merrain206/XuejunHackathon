@@ -1,6 +1,6 @@
 # Ask the Company — Frontend MVP
 
-思看科技（688583）的可验证企业问答 Demo。当前版本默认使用经公开招股书核验的 Mock Evidence；配置后端地址后会自动请求 FastAPI。
+思看科技（688583）的可验证企业问答 Demo。当前版本默认使用经公开招股书和 2025 年半年度报告核验的 Mock Evidence；配置后端地址后会自动请求 FastAPI，后端不可用时自动降级为演示数据。
 
 ## 本地运行
 
@@ -68,7 +68,7 @@ Content-Type: application/json
       "content": "...",
       "document_id": "DOC-001",
       "document_title": "招股说明书（注册稿）",
-      "source_page": 206,
+      "source_page": 323,
       "source_quote": "...",
       "source_url": "https://..."
     }
@@ -78,6 +78,16 @@ Content-Type: application/json
 ```
 
 所有 Claim 和 Signal 必须包含至少一个真实 `evidence_id`。没有足够证据时，后端应返回空数组和固定兜底回答。
+
+前端通过 `sourceMode` 区分三种数据状态：`api`（真实后端）、`mock`（未配置后端）和 `fallback`（后端异常后自动降级）。`sourceMode` 是前端适配层字段，不要求后端返回。
+
+当前稳定演示问题：
+
+- 你的收入结构发生了什么变化？
+- 你最近真的赚钱吗？
+- 目前最值得关注的风险是什么？
+
+完整交接说明见 [`docs/HANDOFF.md`](docs/HANDOFF.md)。
 
 ## 验证
 
