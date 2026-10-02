@@ -465,12 +465,13 @@ print("=" * 74)
 print("⑧ 方案 A：真实库在工作区根目录时能被自动找到")
 print("=" * 74)
 
-real_db = ROOT.parent / "data" / "cninfo.db"
+real_db = ROOT.parent / "xuejun-hackathon" / "data" / "cninfo.db"
 if real_db.is_file():
-    # 配置刻意指向不存在的位置，但允许回退 → 应自动找到 ../data/cninfo.db
+    # 配置刻意指向不存在的位置，但允许回退 → 应自动找到真实库
     use_db(TEST_DIR / "deliberately_missing.db", fallback=True)
     resolved = config.settings.db_file
-    check("默认配置下能回退找到 ../data/cninfo.db", resolved == real_db, str(resolved))
+    check("默认配置下能回退找到 xuejun-hackathon/data/cninfo.db",
+          resolved == real_db, str(resolved))
     try:
         stocks_real = db.get_stocks()
         total_real = db.count_announcements()

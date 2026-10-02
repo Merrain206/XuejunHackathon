@@ -194,10 +194,12 @@ class Settings(BaseSettings):
     def db_file(self) -> Path:
         """cninfo.db 的路径。
 
-        解析顺序（方案 A：自适应，不动用户的文件布局）：
+        解析顺序（自适应，不动用户的文件布局）：
           1. DB_PATH 指向的文件确实存在 → 用它；
-          2. 否则依次尝试候选：data/cninfo.db（相对 xray-backend/）、
-             ../data/cninfo.db（数据库放在工作区根目录时）；
+          2. 否则依次尝试候选：
+             data/cninfo.db（相对 xray-backend/）
+             ../data/cninfo.db（库放在仓库根）
+             ../xuejun-hackathon/data/cninfo.db（库放在产出它的项目里 —— 当前布局）
           3. 都不存在 → 返回配置的路径（让 db.py 抛出带明确路径的错误）。
 
         DB_PATH_STRICT=true 时跳过第 2 步（只认 DB_PATH），
@@ -209,10 +211,19 @@ class Settings(BaseSettings):
         if configured.is_file() or self.DB_PATH_STRICT:
             return configured
 
-        for candidate in (BASE_DIR / "data" / "cninfo.db", BASE_DIR.parent / "data" / "cninfo.db"):
+        for candidate in self._db_candidates():
             if candidate.is_file():
                 return candidate
         return configured
+
+    def _db_candidates(self) -> list[Path]:
+        """候选数据库路径（顺序即优先级）。"""
+        return [
+            BASE_DIR / "data" / "cninfo.db",
+            BASE_DIR.parent / "data" / "cninfo.db",
+            # 当前仓库布局：库与产出它的管道脚本同在 xuejun-hackathon/ 下
+            BASE_DIR.parent / "xuejun-hackathon" / "data" / "cninfo.db",
+        ]
 
     @property
     def db_candidates(self) -> list[Path]:
@@ -220,11 +231,7 @@ class Settings(BaseSettings):
         configured = Path(self.DB_PATH)
         if not configured.is_absolute():
             configured = BASE_DIR / configured
-        return [
-            configured,
-            BASE_DIR / "data" / "cninfo.db",
-            BASE_DIR.parent / "data" / "cninfo.db",
-        ]
+        return [configured, *self._db_candidates()]
 
     @property
     def cache_dir(self) -> Path:

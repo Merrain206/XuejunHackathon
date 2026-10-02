@@ -1,20 +1,30 @@
 # ============================================================================
-#  工作区根目录 .gitignore
-#  （xray-backend/ 有它自己的 .gitignore，git 会自动叠加生效）
+#  仓库根 .gitignore
+#  三个子项目各自也有 .gitignore（git 会叠加生效）：
+#    ai-web-ppt/.gitignore        （若存在）
+#    xray-backend/.gitignore
+#    xuejun-hackathon/.gitignore
 # ============================================================================
 
-# ---- 运行时 / 依赖 ----
+# ---- Node 依赖与缓存 ----
 node_modules/
 .npm-cache/
 runtime/
 
 # ---- 构建产物 ----
+dist/
+build/
+.next/
 web/dist/
 
 # ---- 机密与本地配置 ----
+# 三个项目各有自己的 .env（ai-web-ppt/.env、xray-backend/.env、
+# xuejun-hackathon/.env.local），全部排除
 .env
 .env.local
 .env.*.local
+*.env.local
+.ssh-key/
 
 # ---- 运行期产出 ----
 outputs/
@@ -39,14 +49,14 @@ venv/
 .pytest-run/
 .pytest-data/
 .pytest-tmp*/
-# pytest 在无法写 .pytest_cache 时会创建的空目录（受限环境下沙箱所致）
 pytest-cache-files-*/
 
 # ---- 数据源（体积大、由外部提供，不入版本库）----
-# 注意：xray-backend/data/ 由 xray-backend/.gitignore 覆盖；
-# 这里覆盖工作区根的 data/（真实库 cninfo.db 约 11MB）
+# 当前实际位置：xuejun-hackathon/data/cninfo.db
 data/
 *.db
+*.sqlite
+*.sqlite3
 *.db-wal
 *.db-shm
 
