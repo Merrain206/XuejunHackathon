@@ -82,14 +82,23 @@ def test_high_risk_company_surfaces_findings_and_quotes(analyzed):
     assert payload["evidence"], "high 风险公司应有 evidence"
     assert payload["charts"], "high 风险公司应有 charts"
 
+    # 内部规则 S1/S4 映射到前端契约的 divergence/attention
     types = {s["type"] for s in payload["signals"]}
-    assert types == {"S1", "S4"}, f"风险主题不符: {types}"
+    assert types == {"divergence", "attention"}, f"前端 signal type 不符: {types}"
+    assert all(s["severity"] in ("attention", "positive") for s in payload["signals"])
+    assert all("side" not in s for s in payload["signals"]), "前端类型里没有 side"
 
+    # 前端 isEvidence 的硬要求
     for ev in payload["evidence"]:
         assert ev["source_quote"], "每条证据必须有原文引用"
         assert ev["document_title"], "证据应带公告文件名"
+        assert ev["category"] in ("financial", "business", "company"), ev["category"]
+        assert isinstance(ev["source_page"], int) and ev["source_page"] > 0, ev["source_page"]
+        assert str(ev["source_url"]).startswith(("http://", "https://")), ev["source_url"]
+        assert ev["document_id"], "document_id 不能为空"
     for claim in payload["claims"]:
         assert claim["evidence_ids"], "每条 claim 至少 1 个 evidence_id"
+        assert set(claim) == {"id", "text", "evidence_ids"}, "claim 字段须与前端类型一致"
 
 
 def test_answer_includes_cached_summary_and_latest_announcement(analyzed):
@@ -212,7 +221,7 @@ def test_signals_endpoint_reads_cache(analyzed):
     assert response.status_code == 200
     body = response.json()
     types = {s["type"] for s in body["signals"]}
-    assert types == {"S1", "S4"}, types
+    assert types == {"divergence", "attention"}, types
     assert body["computed_at"], "应带分析时间"
     assert body["source"] == "llm"
 

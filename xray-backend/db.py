@@ -133,6 +133,36 @@ def _ensure_docs_table(con: sqlite3.Connection) -> None:
         )
 
 
+#: docs 表里「公告链接」的可选列名（按优先级）。
+#: 这列**不是必需的**：管道还没补时，db.py 会回退到可打开的公告列表页，
+#: 而不是编造一个点开就 404 的公告深链。
+OPTIONAL_URL_COLUMNS: tuple[str, ...] = ("url", "source_url", "doc_url")
+
+
+def _optional_columns(con: sqlite3.Connection) -> set[str]:
+    """docs 表里真实存在的列名（用于探测可选列）。"""
+    try:
+        return {r[1] for r in con.execute("PRAGMA table_info(docs)")}
+    except sqlite3.Error:
+        return set()
+
+
+def _url_column(con: sqlite3.Connection) -> str | None:
+    """返回真正存在的 URL 列名；没有则 None。"""
+    actual = _optional_columns(con)
+    return next((c for c in OPTIONAL_URL_COLUMNS if c in actual), None)
+
+
+def cninfo_list_url(stock_code: str) -> str:
+    """巨潮资讯网该公司公告列表页（真实存在、可直接打开）。
+
+    用在拿不到单篇公告直链时的回退 —— 这是**真实可达的页面**，
+    不是伪造的深链。前端只要求 source_url 是合法 http(s) URL。
+    """
+    base = settings.CNINFO_LIST_URL.rstrip("/")
+    return f"{base}?stock={stock_code}&tabName=fulltext"
+
+
 def _rows(con: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> Iterator[sqlite3.Row]:
     try:
         yield from con.execute(sql, params).fetchall()
@@ -294,15 +324,25 @@ def parse_announce_date(*candidates: str | None) -> str | None:
     return None
 
 
-def _row_to_dict(row: sqlite3.Row, *, body_chars: int | None = None) -> dict[str, Any]:
+def _row_to_dict(
+    row: sqlite3.Row,
+    *,
+    body_chars: int | None = None,
+    url_column: str | None = None,
+) -> dict[str, Any]:
     """把一行转成统一 dict（对外契约，字段名固定）。
 
     :param body_chars: 正文截断长度；None = 不截断
+    :param url_column: docs 表里实际存在的 URL 列名（可为 None）
 
     ⚠️ 关于两个日期字段：
       * `created_date` —— 来自 created_at，是**入库时间**，不是公告发布日；
       * `announce_date` —— 从 file_name 尽力解析出的**公告日期**（方案 B），
         解析不到为 None。排序与时间窗口过滤一律用 announce_date。
+
+    ⚠️ 关于 `source_url`：
+      优先取 docs 表里的 URL 列（管道补上之后）；拿不到时回退到巨潮的
+      公告列表页 —— **真实可达的页面**，绝不伪造公告深链。
     """
     body = row["text_content"] or ""
     if body_chars is not None and len(body) > body_chars:
@@ -312,6 +352,16 @@ def _row_to_dict(row: sqlite3.Row, *, body_chars: int | None = None) -> dict[str
     parsed_created = parse_created_at(created_raw)
     announce_date = parse_announce_date(row["file_name"], row["rel_path"])
     raw_title = row["file_name"] or ""
+
+    # 公告链接：库里有的用库里的，没有的用列表页兜底
+    doc_url: str | None = None
+    if url_column:
+        try:
+            candidate = row[url_column]
+        except (IndexError, KeyError):
+            candidate = None
+        if isinstance(candidate, str) and candidate.strip().startswith(("http://", "https://")):
+            doc_url = candidate.strip()
 
     return {
         # 业务标识
@@ -329,6 +379,9 @@ def _row_to_dict(row: sqlite3.Row, *, body_chars: int | None = None) -> dict[str
         "text_content": body,
         "text_length": len(row["text_content"] or ""),
         "has_tables": bool(row["tables_json"]),
+        # 出处链接（前端的 source_url 硬要求合法 http(s) URL）
+        "source_url": doc_url or cninfo_list_url(str(row["company_code"] or "")),
+        "source_url_is_detail": doc_url is not None,
     }
 
 
@@ -387,6 +440,7 @@ def get_announcements(
 
     with connect() as con:
         _ensure_docs_table(con)
+        url_column = _url_column(con)
         rows = list(
             _rows(
                 con,
@@ -399,7 +453,7 @@ def get_announcements(
     # (排序键, 是否日期未知, 条目)
     parsed_rows: list[tuple[date, bool, dict[str, Any]]] = []
     for row in rows:
-        item = _row_to_dict(row, body_chars=body_chars)
+        item = _row_to_dict(row, body_chars=body_chars, url_column=url_column)
         raw_date = item.get("announce_date")
         if raw_date:
             try:
@@ -463,6 +517,7 @@ def search_announcements(keyword: str, limit: int = 50) -> list[dict[str, Any]]:
 
     with connect() as con:
         _ensure_docs_table(con)
+        url_column = _url_column(con)
         rows = list(
             _rows(
                 con,
@@ -474,7 +529,10 @@ def search_announcements(keyword: str, limit: int = 50) -> list[dict[str, Any]]:
                 (pattern, pattern, pattern, limit),
             )
         )
-    return [_row_to_dict(row, body_chars=settings.ANNOUNCEMENT_MAX_CHARS) for row in rows]
+    return [
+        _row_to_dict(row, body_chars=settings.ANNOUNCEMENT_MAX_CHARS, url_column=url_column)
+        for row in rows
+    ]
 
 
 def count_announcements(stock_code: str | None = None) -> int:

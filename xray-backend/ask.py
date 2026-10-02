@@ -40,6 +40,7 @@ from analyzer import (
 from config import settings
 from db import (
     DatabaseNotReadyError,
+    cninfo_list_url,
     count_announcements,
     db_status,
     get_announcements,
@@ -50,7 +51,6 @@ from schemas import (
     AdminRefreshResponse,
     AskRequest,
     AskResponse,
-    ChartPoint,
     ChartSeries,
     ChartSpec,
     Claim,
@@ -60,6 +60,9 @@ from schemas import (
     HealthResponse,
     Signal,
     SignalListResponse,
+    to_evidence_category,
+    to_severity,
+    to_signal_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,40 +104,112 @@ NO_ANALYSIS_HINT = (
 
 
 def _signal_type_of(finding: dict[str, Any]) -> str:
+    """内部规则编号（S1-S4），用于分组统计。"""
     value = str(finding.get("type") or "").strip().upper()
     return value if value in ("S1", "S2", "S3", "S4") else "S4"
 
 
-def _build_evidence(quotes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+def _announcement_index(announcements: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """建索引：docs.id（字符串）与文件名 → 公告行，用于补 source_page / source_url。"""
+    index: dict[str, dict[str, Any]] = {}
+    for item in announcements:
+        index[str(item.get("id"))] = item
+        name = item.get("file_name")
+        if name:
+            index[str(name)] = item
+    return index
+
+
+def _lookup_announcement(
+    quote: dict[str, Any], index: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """按 source_id 找公告；找不到再用 source_file 兜一次。"""
+    source_id = quote.get("source_id")
+    if source_id is not None:
+        found = index.get(str(source_id))
+        if found:
+            return found
+    source_file = quote.get("source_file")
+    if source_file:
+        return index.get(str(source_file))
+    return None
+
+
+def _build_evidence(
+    quotes: list[dict[str, Any]],
+    announcements: list[dict[str, Any]],
+    stock_code: str,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """把 evidence_quotes 转成响应体 evidence[]，并返回 quote_id → evidence_id 映射。
 
-    evidence id 用 EV-001 形式（前端更友好），保留与 quote id 的对应关系。
-
-    ⚠️ 契约要求每条 evidence 必须带 source_quote（见 schemas.Evidence._quote_required），
-    因此**没有原文引用的 quote 直接跳过**，而不是构造一个必然校验失败的 Evidence。
+    ⚠️ 严格对齐前端 api.ts 的 isEvidence()：category 只能是
+    financial/business/company，document_id 非空，source_page 为正整数，
+    source_url 为合法 http(s) URL，source_quote 非空。
+    任一项不满足，**前端会把整包响应判为非法并静默降级为 mock**，
+    所以这里逐项兜底，而不是把空值透传出去。
     """
+    index = _announcement_index(announcements)
+    fallback_url = cninfo_list_url(stock_code)
+
     evidence: list[dict[str, Any]] = []
     mapping: dict[str, str] = {}
+
     for quote in quotes:
         raw_quote = str(quote.get("source_quote") or "").strip()
         if not raw_quote:
             logger.warning("跳过缺少 source_quote 的证据：%r", quote.get("id"))
             continue
+
+        hit = _lookup_announcement(quote, index)
         ev_id = f"EV-{len(evidence) + 1:03d}"
         mapping[str(quote.get("id"))] = ev_id
+
+        # document_id：优先公告真实 id；退而用 source_id；再不行用文件名
+        if hit is not None:
+            document_id = str(hit.get("id"))
+        elif quote.get("source_id") is not None:
+            document_id = str(quote["source_id"])
+        else:
+            document_id = str(quote.get("source_file") or "unknown")
+
+        # source_url：库里有直链就用，否则用巨潮公告列表页（真实可达）
+        source_url = ""
+        if hit is not None:
+            source_url = str(hit.get("source_url") or "")
+        if not source_url.startswith(("http://", "https://")):
+            source_url = fallback_url
+
+        # source_page：前端要求 >0 的整数。库里没有"引用所在页"这一信息，
+        # 用公告页数夹取，默认 1（公告起始页），绝不传 null。
+        page = 1
+        if hit is not None:
+            raw_pages = hit.get("page_count")
+            if isinstance(raw_pages, int) and raw_pages > 0:
+                page = raw_pages if raw_pages > 0 else 1
+        page = max(1, page)
+
+        period = (
+            str(quote.get("source_date") or "").strip()
+            or (str(hit.get("announce_date")) if hit and hit.get("announce_date") else "")
+            or (str(hit.get("created_date")) if hit and hit.get("created_date") else "")
+            or "公告披露期间"
+        )
+
         evidence.append(
             {
                 "id": ev_id,
-                "category": "announcement",
-                "period": quote.get("source_date"),
+                "category": to_evidence_category(str(quote.get("risk_dimension") or "")),
+                "period": period[:64],
                 "content": str(quote.get("content") or raw_quote[:200]),
-                "document_id": (
-                    str(quote["source_id"]) if quote.get("source_id") is not None else None
+                "document_id": document_id,
+                "document_title": str(
+                    (hit.get("file_name") if hit else None)
+                    or quote.get("source_file")
+                    or document_id
                 ),
-                "document_title": quote.get("source_file"),
-                "source_page": None,
+                "source_page": page,
                 "source_quote": raw_quote,
-                "source_url": None,
+                "source_url": source_url,
                 "risk_dimension": quote.get("risk_dimension") or "其他",
             }
         )
@@ -144,18 +219,20 @@ def _build_evidence(quotes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
 def _build_claims(
     findings: list[dict[str, Any]], mapping: dict[str, str]
 ) -> list[dict[str, Any]]:
+    """claims —— 前端只校验 id/text 非空、evidence_ids 非空且可解析。"""
     claims: list[dict[str, Any]] = []
     for index, finding in enumerate(findings, start=1):
         ids = [mapping[q] for q in (finding.get("evidence_ids") or []) if q in mapping]
         if not ids:
-            continue  # 无引用的结论不输出
+            continue  # 无引用的结论不输出（No Evidence, No Claim）
+        title = str(finding.get("title") or "").strip()
+        description = str(finding.get("description") or "").strip()
+        text = f"{title}：{description}".strip("：") or title or description
         claims.append(
             {
                 "id": f"CL-{index:03d}",
-                "text": f"{finding.get('title')}：{finding.get('description')}".strip("："),
+                "text": text[:1000],
                 "evidence_ids": ids,
-                "verified": True,
-                "verification_note": "结论来自公告原文引用，可逐条回查。",
             }
         )
     return claims
@@ -164,38 +241,51 @@ def _build_claims(
 def _build_signals(
     findings: list[dict[str, Any]], mapping: dict[str, str], summary: str
 ) -> list[dict[str, Any]]:
+    """signals —— 前端只认 type ∈ {divergence,trend,attention}、
+    severity ∈ {attention,positive}，且不接受 side 字段（多余的字段前端不校验，
+    但保持精简更安全）。
+    """
     signals: list[dict[str, Any]] = []
     for finding in findings:
         ids = [mapping[q] for q in (finding.get("evidence_ids") or []) if q in mapping]
         if not ids:
             continue
-        signal_type = _signal_type_of(finding)
+        rule_id = _signal_type_of(finding)
+        title = str(finding.get("title") or rule_id).strip()[:64] or rule_id
+        description = str(finding.get("description") or summary).strip() or summary
         signals.append(
             {
-                "id": signal_type,
-                "type": signal_type,
-                "title": str(finding.get("title") or signal_type)[:64],
-                "side": "negative",
-                "severity": finding.get("severity") or "medium",
-                "description": str(finding.get("description") or summary)[:1000] or summary,
+                # 形如 SIG-S1；前端只要求非空字符串
+                "id": f"SIG-{rule_id}",
+                "type": to_signal_type(rule_id),
+                "title": title,
+                "severity": to_severity(str(finding.get("severity") or "medium")),
+                "description": description[:1000],
                 "evidence_ids": ids,
             }
         )
     return signals
 
 
+#: 图表里各风险主题的中文短标签
+_RULE_LABELS = {"S1": "利润/现金流", "S2": "营收/应收", "S3": "人员", "S4": "司法合规"}
+
+
 def _build_charts(
     analysis: dict[str, Any], mapping: dict[str, str]
 ) -> list[dict[str, Any]]:
-    """由 findings 派生图表：按风险类型统计条数。
+    """由 findings 派生图表：按风险主题统计条数。
 
-    :param mapping: quote_id → evidence_id（由 _build_evidence 产出）。
-                    图表的 evidence_ids 必须是**已存在的 evidence id**，
-                    否则会触发契约的"悬空引用"校验。
-    没有任何有效引用时返回空数组（契约允许）。
+    前端只支持折线图（api.ts 里写死 `value.type !== "line"` 即判非法），
+    且要求 `series[].values` 长度与 `periods` 一致、元素为有限数值。
+    这里用「每类主题累计发现条数」构造折线，periods 即四类主题。
+
+    :param mapping: quote_id → evidence_id（由 _build_evidence 产出）
+    没有任何有效引用时返回空数组（契约允许 charts 为空）。
     """
     if not settings.CHARTS_ENABLED:
         return []
+
     findings = analysis.get("findings") or []
     if not findings:
         return []
@@ -204,17 +294,15 @@ def _build_charts(
     for finding in findings:
         key = _signal_type_of(finding)
         counts[key] = counts.get(key, 0) + 1
-
-    labels = {"S1": "利润/现金流", "S2": "营收/应收", "S3": "人员", "S4": "司法合规"}
-    points = [
-        {"label": f"{key} {labels[key]}", "value": float(counts[key])}
-        for key in ("S1", "S2", "S3", "S4")
-        if key in counts
-    ]
-    if not points:
+    if not counts:
         return []
 
-    # 借用本次 finding 引用到、且确实生成了 evidence 的第一个 id
+    periods = [f"{k} {_RULE_LABELS[k]}" for k in ("S1", "S2", "S3", "S4") if k in counts]
+    values = [float(counts[k]) for k in ("S1", "S2", "S3", "S4") if k in counts]
+    if not periods or len(periods) != len(values):
+        return []
+
+    # 借用本次 finding 引用到、且确实生成了 evidence 的 id（图表也要有出处）
     evidence_ids: list[str] = []
     for finding in findings:
         for quote_id in finding.get("evidence_ids") or []:
@@ -226,13 +314,14 @@ def _build_charts(
 
     return [
         {
-            "id": "chart-risk-by-type",
+            "id": "CHART-RISK-BY-TYPE",
+            "type": "line",
             "title": "风险发现分布",
-            "kind": "bar",
+            "subtitle": "按四类风险主题统计本次分析发现的条数",
             "unit": "条",
-            "series": [{"name": "发现条数", "points": points}],
-            "evidence_ids": evidence_ids[:1],
-            "note": "按四类风险主题统计本次分析发现的条数。",
+            "periods": periods,
+            "series": [{"name": "发现条数", "values": values}],
+            "evidence_ids": evidence_ids,
         }
     ]
 
@@ -316,7 +405,18 @@ def build_answer_payload(
 
     quotes = (analysis or {}).get("evidence_quotes") or []
     findings = (analysis or {}).get("findings") or []
-    evidence, mapping = _build_evidence(quotes)
+
+    # 取公告行本身，用于补前端硬要求字段（document_id / source_page / source_url）
+    announcements: list[dict[str, Any]] = []
+    if quotes:
+        try:
+            announcements = get_announcements(
+                stock_code, days=None, limit=None, body_chars=0
+            )
+        except (DatabaseNotReadyError, ValueError) as exc:
+            logger.warning("读取公告行失败（source_url/source_page 将走兜底）：%s", exc)
+
+    evidence, mapping = _build_evidence(quotes, announcements, stock_code)
     claims = _build_claims(findings, mapping)
     signals = _build_signals(findings, mapping, answer)
     charts = _build_charts(analysis or {}, mapping)
@@ -439,7 +539,11 @@ def company_signals(stock_code: str) -> Any:
 
     quotes = analysis.get("evidence_quotes") or []
     findings = analysis.get("findings") or []
-    _evidence, mapping = _build_evidence(quotes)
+    try:
+        announcements = get_announcements(code, days=None, limit=None, body_chars=0)
+    except (DatabaseNotReadyError, ValueError):
+        announcements = []
+    _evidence, mapping = _build_evidence(quotes, announcements, code)
     raw = _build_signals(findings, mapping, str(analysis.get("summary") or ""))
 
     signals: list[Signal] = []

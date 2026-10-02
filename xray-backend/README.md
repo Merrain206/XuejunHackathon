@@ -73,26 +73,74 @@ curl -s -X POST "http://127.0.0.1:8000/admin/refresh?stock_code=688583" \
 
 ### 响应结构（顶层恰好 6 个字段，顺序固定）
 
+**契约以 `xuejun-hackathon/src/lib/api.ts` 的运行时校验器为准** ——
+它不通过就会**静默降级为 mock**（界面显示 `DEMO FALLBACK`），所以每个取值都是硬约束。
+
 ```jsonc
 {
-  "answer":   "688583：净利润为正但经营现金流为负……（风险等级：high，共 2 条发现）最新公告（2026-09-22）：2023年年度报告.pdf。",
-  "claims":   [ { "id", "text", "evidence_ids", "verified", "verification_note" } ],
-  "signals":  [ { "id", "type", "title", "side", "severity", "description", "evidence_ids" } ],
-  "charts":   [ { "id", "title", "kind", "unit", "series", "evidence_ids", "note" } ],
-  "evidence": [ { "id", "category", "period", "content", "document_id",
-                  "document_title", "source_quote", "risk_dimension" } ],
+  "answer":  "688583：净利润为正但经营现金流为负……最新公告（2025-07-01）：董事会议事规则（2025年7月修订）.PDF。",
+  "claims":  [ { "id": "CL-001", "text": "…", "evidence_ids": ["EV-001"] } ],
+  "signals": [ { "id": "SIG-S1", "type": "divergence", "title": "利润与现金流背离",
+                 "severity": "attention", "description": "…", "evidence_ids": ["EV-001"] } ],
+  "charts":  [ { "id": "CHART-RISK-BY-TYPE", "type": "line", "title": "风险发现分布",
+                 "subtitle": "…", "unit": "条", "periods": ["S1 利润/现金流", "S4 司法合规"],
+                 "series": [ { "name": "发现条数", "values": [1.0, 1.0] } ],
+                 "evidence_ids": ["EV-001", "EV-002"] } ],
+  "evidence": [ { "id": "EV-001", "category": "financial", "period": "2025-07-01",
+                  "content": "…", "document_id": "1",
+                  "document_title": "2024年年度报告.PDF", "source_page": 283,
+                  "source_quote": "…逐字原文…", "source_url": "https://…",
+                  "risk_dimension": "现金真实性" } ],
   "suggested_questions": [ "…" ]
 }
 ```
 
-**契约要点**
+**逐项硬约束（前端校验器逐条检查）**
 
-* `signals[].type` 只能是 `S1`–`S4` 四类风险主题。
-* 每条 `evidence` **必须带 `source_quote`（逐字原文）** —— 没有引用的证据会被契约直接拒绝。
-* `claims` / `signals` / `evidence` **允许为空数组**：LLM 回答「无足够信息」时就是这种情况，
-  此时不会硬塞一条没有原文引用的结论来凑数。
-* 只要有 claim/signal/chart，其 `evidence_ids` 必须能在 `evidence` 里解析（悬空引用直接报错）。
-* 命中情况通过响应头返回，不污染响应体：`X-XRay-Cache`（`hit-cache`/`miss`）、`X-XRay-Elapsed-Ms`。
+| 字段 | 约束 | 不满足的后果 |
+| --- | --- | --- |
+| `signals[].type` | `divergence` / `trend` / `attention` | 整包判非法 → 降级 mock |
+| `signals[].severity` | `attention` / `positive` | 同上 |
+| `charts[].type` | 必须是 `"line"`（前端只实现折线） | 同上 |
+| `charts[].series[].values` | 长度**必须等于** `periods` 长度，元素为有限数值 | 同上 |
+| `evidence[].category` | `financial` / `business` / `company` | 同上 |
+| `evidence[].source_page` | **正整数**（不接受 `null`） | 同上 |
+| `evidence[].source_url` | 合法 `http(s)` URL（不接受 `null`） | 同上 |
+| `evidence[].source_quote` | 非空（`No Evidence, No Claim`） | 同上 |
+| `claims[]` / `signals[]` / `charts[]` 的 `evidence_ids` | 非空，且都能在 `evidence[]` 里解析 | 同上 |
+
+内部规则编号 `S1`–`S4` 仍然用于 LLM prompt 与统计，对外由 `schemas.SIGNAL_TYPE_MAP`
+/ `SEVERITY_MAP` 翻译成前端取值：
+
+| 内部 | 前端 type | 前端 severity |
+| --- | --- | --- |
+| S1 利润与现金流背离 | `divergence` | high/medium → `attention` |
+| S2 营收与应收背离 | `attention` | high/medium → `attention` |
+| S3 人员与规模背离 | `attention` | low → `positive` |
+| S4 司法合规风险 | `attention` | |
+
+**验收入口**：
+
+```bash
+python scripts/check_frontend_contract.py
+```
+
+它把 `api.ts` 的 `isAskApiResponse()` 逐条翻译成 Python，用**真实库 + 桩 LLM**
+跑完整链路并逐字段判定。当前结果：整包通过。
+
+### `source_url` 与 `source_page` 怎么来的
+
+`docs` 表没有 URL 列，所以：
+
+* **`source_url`**：优先取 `docs` 表的 URL 列（列名 `url` / `source_url` / `doc_url`
+  任一，存在即自动采用 —— 你重新灌库补上这列后**无需改代码**）；
+  拿不到时回退到**巨潮资讯网该公司公告列表页**（真实可达，未伪造公告深链）。
+  返回值里带 `source_url_is_detail` 标记是否是公告直链。
+* **`source_page`**：库里没有「引用所在页」这一信息，因此用该公告的 `page_count`
+  兜底（保证是正整数）。要精确到引用所在页，需要在 `docs` 表补一列或让 LLM 输出页码。
+
+> 这两项是**方案 A 的过渡实现**：等管道把 `url`（和可选的精确页码）灌进 `docs` 表，
+> 后端会自动改用真实值，不用改代码。
 
 ---
 

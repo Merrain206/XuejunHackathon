@@ -31,13 +31,63 @@ from pydantic import (
 
 SignalSide = Literal["positive", "negative"]
 SignalSeverity = Literal["high", "medium", "low"]
-#: 风险主题编号（analyzer.py 的 prompt 只允许这 4 类结论）
-SignalType = Literal["S1", "S2", "S3", "S4"]
-#: 同一份清单的元组形式，供热解校验与错误提示复用
-ALLOWED_SIGNAL_TYPES: tuple[str, ...] = ("S1", "S2", "S3", "S4")
+#: 信号类型 / 严重度 —— 取值必须与前端 xuejun-hackathon/src/lib/api.ts
+#: 的运行时校验器**完全一致**。前端校验不通过会静默降级为 mock 并显示
+#: DEMO FALLBACK，所以这里的每个取值都是硬约束，不是风格偏好。
+SignalType = Literal["divergence", "trend", "attention"]
+SignalSeverity = Literal["attention", "positive"]
+ALLOWED_SIGNAL_TYPES: tuple[str, ...] = ("divergence", "trend", "attention")
+ALLOWED_SIGNAL_SEVERITIES: tuple[str, ...] = ("attention", "positive")
 
-#: charts[].kind —— 前端据此选渲染器
-ChartKind = Literal["line", "bar", "pie", "donut", "table"]
+#: 内部风险主题（S1-S4）→ 前端 signal type 的映射。
+#: 内部仍用 S1-S4 做 LLM prompt 的约束（结构清晰、便于对账），
+#: 对外则翻译成前端认识的三类。
+SIGNAL_TYPE_MAP: dict[str, str] = {
+    "S1": "divergence",   # 利润与现金流背离
+    "S2": "attention",    # 营收与应收背离 → 需要关注
+    "S3": "attention",    # 人员与规模背离 → 需要关注
+    "S4": "attention",    # 司法合规风险 → 需要关注
+}
+
+#: 内部 severity（high/medium/low）→ 前端 severity（attention/positive）
+SEVERITY_MAP: dict[str, str] = {
+    "high": "attention",
+    "medium": "attention",
+    "low": "positive",
+}
+
+#: 前端只支持折线图（api.ts 里写死 `type !== "line"` 即判不合法）
+ChartKind = Literal["line"]
+
+#: 证据类别 —— 前端校验器只接受这三个值
+EvidenceCategory = Literal["financial", "business", "company"]
+
+
+def to_signal_type(rule_id: str) -> str:
+    """内部规则编号（S1-S4）→ 前端 signal type。"""
+    return SIGNAL_TYPE_MAP.get((rule_id or "").strip().upper(), "attention")
+
+
+def to_severity(level: str) -> str:
+    """内部 severity → 前端 severity。"""
+    return SEVERITY_MAP.get((level or "").strip().lower(), "attention")
+
+
+def to_evidence_category(hint: str | None) -> str:
+    """把内部/模型的类别提示归一到前端接受的三个值。
+
+    前端 isEvidence() 只认 financial / business / company，
+    给别的值会导致**整包响应**被判定非法 → 静默降级 mock。
+    """
+    text = (hint or "").strip().lower()
+    if text in ("financial", "business", "company"):
+        return text
+    if any(k in text for k in ("财务", "会计", "利润", "现金", "营收", "资产", "financial")):
+        return "financial"
+    if any(k in text for k in ("工商", "基础", "company", "注册", "股东")):
+        return "company"
+    # 其余一律归 business（公告主体内容）
+    return "business"
 
 #: 风险维度（用于 evidence.risk_dimension，方便前端画维度图）
 RiskDimension = Literal[
@@ -89,14 +139,16 @@ class AskRequest(BaseModel):
 
 
 class Claim(_StrictModel):
-    """主张：必须可被真实证据支撑。"""
+    """主张：必须可被真实证据支撑。
+
+    字段严格对齐前端 types.ts 的 Claim（只有 id / text / evidence_ids）——
+    多加字段前端不会读，反而让契约含糊。
+    """
 
     id: Annotated[str, Field(min_length=1, max_length=64, description="如 CL-001")]
     text: Annotated[str, Field(min_length=1, max_length=1000)]
     #: 至少 1 个真实 evidence_id —— 没有证据就不许下结论
     evidence_ids: Annotated[list[str], Field(min_length=1)]
-    verified: bool = False
-    verification_note: str | None = None
 
     @field_validator("evidence_ids")
     @classmethod
@@ -112,29 +164,39 @@ class Claim(_StrictModel):
 
 
 class Signal(_StrictModel):
-    """4 对矛盾信号的输出结构。"""
+    """风险信号 —— 字段与取值严格对齐前端 api.ts 的 isSignal()。
 
-    id: Annotated[str, Field(min_length=2, max_length=8)]
+    前端校验要求：id / title / description 非空字符串，
+    type ∈ {divergence,trend,attention}，severity ∈ {attention,positive}，
+    evidence_ids 非空且都能在 evidence[] 里找到。
+    """
+
+    #: 形如 SIG-S1 —— 前端只要求非空（样例里是 SIG-STR-001）
+    id: Annotated[str, Field(min_length=1, max_length=64)]
     type: SignalType
     title: Annotated[str, Field(min_length=1, max_length=64)]
-    side: SignalSide
     severity: SignalSeverity
     description: Annotated[str, Field(min_length=1, max_length=1000)]
-    #: 命中所依据的字典字段名
     evidence_ids: Annotated[list[str], Field(min_length=1)]
 
     @field_validator("type")
     @classmethod
     def _known_signal(cls, value: str) -> str:
         if value not in ALLOWED_SIGNAL_TYPES:
-            raise ValueError(f"信号编号必须是 {ALLOWED_SIGNAL_TYPES} 之一，收到 {value!r}")
+            raise ValueError(
+                f"signal.type 必须是 {ALLOWED_SIGNAL_TYPES} 之一（前端契约），收到 {value!r}"
+            )
         return value
 
-    @model_validator(mode="after")
-    def _id_matches_type(self) -> "Signal":
-        if self.id != self.type:
-            raise ValueError(f"signal.id 必须等于 type（{self.type}），收到 id={self.id!r}")
-        return self
+    @field_validator("severity")
+    @classmethod
+    def _known_severity(cls, value: str) -> str:
+        if value not in ALLOWED_SIGNAL_SEVERITIES:
+            raise ValueError(
+                f"signal.severity 必须是 {ALLOWED_SIGNAL_SEVERITIES} 之一（前端契约），"
+                f"收到 {value!r}"
+            )
+        return value
 
     @field_validator("evidence_ids")
     @classmethod
@@ -148,71 +210,75 @@ class Signal(_StrictModel):
 class Evidence(_StrictModel):
     """证据：必须可回溯到具体公告的原文片段。
 
-    ⚠️ 新版数据源是公库原文（cninfo.db 的公告正文），没有结构化财务字段，
-    因此不再有 field_names；取而代之的是公告出处（document_title / source_page /
-    source_quote），保证「结论必须附原文引用」这条硬约束可核查。
+    ⚠️ 字段与取值严格对齐前端 api.ts 的 isEvidence()：
+      * category 只接受 financial / business / company；
+      * document_id 非空字符串；
+      * source_page 必须是**正整数**（不接受 null）；
+      * source_url 必须是合法 http(s) URL（不接受 null）；
+      * source_quote 非空。
+    任意一条不满足 → 前端判定整包响应非法 → **静默降级为 mock**。
     """
 
     id: Annotated[str, Field(min_length=1, max_length=64, description="如 EV-001")]
-    #: 证据类别：announcement / financial / litigation / employment / shareholder / other
-    category: Annotated[str, Field(min_length=1, max_length=64)]
-    #: 公告日期或期间，如 "2024-04-19" 或 "2024年年度"
-    period: str | None = None
+    #: 前端只认这三个值
+    category: EvidenceCategory
+    #: 公告日期或期间，如 "2024-04-19" 或 "2024 年上半年"
+    period: Annotated[str, Field(min_length=1, max_length=64)]
     #: 证据摘要（LLM 归纳）
     content: Annotated[str, Field(min_length=1, max_length=2000)]
-    #: 公告业务 id / 文件名（来自 cninfo.db）
-    document_id: str | None = None
+    #: 公告 id（来自 cninfo.db 的 docs.id），必须是字符串
+    document_id: Annotated[str, Field(min_length=1, max_length=64)]
     #: 公告标题
     document_title: str | None = None
-    source_page: int | None = Field(default=None, ge=1)
+    #: 页码：前端要求 >0 的整数。库里给不出单条引用的精确页码时，
+    #: 用 1（公告起始页）并在 content 里说明，而不是传 null 让前端降级。
+    source_page: int = Field(default=1, ge=1)
     #: ★ 原文摘录（抄自公告正文，用于人工核验）
-    source_quote: str | None = None
-    #: 公告链接
-    source_url: str | None = None
-    #: 风险维度（前端可直接画维度图）
+    source_quote: Annotated[str, Field(min_length=1, max_length=2000)]
+    #: ★ 公告链接：必须是合法 http(s) URL
+    source_url: Annotated[str, Field(min_length=1, max_length=1024)]
+    #: 风险维度（前端可直接画维度图；可选，不参与前端校验）
     risk_dimension: RiskDimension | None = None
 
-    @model_validator(mode="after")
-    def _quote_required(self) -> "Evidence":
-        """硬约束：证据必须有原文摘录，否则不算证据。
-
-        这是「结论必须附带原文引用」在契约层的落实 —— 没有 quote 的
-        evidence 不允许进入响应体。
-        """
-        if not (self.source_quote or "").strip():
-            raise ValueError(f"evidence {self.id} 缺少 source_quote：证据必须附原文引用")
-        return self
-
-
-class ChartPoint(_StrictModel):
-    """图表上的一个数据点。"""
-
-    label: str
-    #: 缺值点保留 null（不许用 0 冒充）
-    value: float | None = None
+    @field_validator("source_url")
+    @classmethod
+    def _url_must_be_http(cls, value: str) -> str:
+        """前端 isHttpUrl() 要求能被 new URL() 解析且协议是 http/https。"""
+        candidate = (value or "").strip()
+        if not candidate.startswith(("http://", "https://")):
+            raise ValueError(
+                f"evidence.source_url 必须是 http(s) URL（前端契约），收到 {value!r}"
+            )
+        return candidate
 
 
 class ChartSeries(_StrictModel):
-    """一条数据序列。"""
+    """一条数据序列 —— 前端要求 values 长度与 periods 一致。"""
 
     name: Annotated[str, Field(min_length=1, max_length=64)]
-    points: Annotated[list[ChartPoint], Field(min_length=1)]
+    values: Annotated[list[float], Field(min_length=1)]
 
 
 class ChartSpec(_StrictModel):
-    """响应体 charts[] 的元素。
+    """响应体 charts[] 的元素 —— 严格对齐前端 isChart()。
 
-    charts 由服务端**确定性生成**（charts.py），不经过大模型；
-    每个图都必须挂真实 evidence_ids，保证图上的数字可回查。
+    前端要求：
+      id / title 非空，type 必须是 "line"，
+      unit 是字符串（可以是空串，但不能缺），
+      periods 非空字符串数组，
+      series 非空且每条的 values 长度 === periods 长度、元素为有限数值，
+      evidence_ids 非空且可解析。
     """
 
     id: Annotated[str, Field(min_length=1, max_length=64)]
+    type: ChartKind
     title: Annotated[str, Field(min_length=1, max_length=64)]
-    kind: ChartKind
-    unit: str | None = None
+    #: 前端会读 subtitle（类型里是可选，但 mock 数据都给了）
+    subtitle: str = ""
+    unit: str = ""
+    periods: Annotated[list[str], Field(min_length=1)]
     series: Annotated[list[ChartSeries], Field(min_length=1)]
     evidence_ids: Annotated[list[str], Field(min_length=1)]
-    note: str | None = None
 
     @field_validator("evidence_ids")
     @classmethod
@@ -224,10 +290,13 @@ class ChartSpec(_StrictModel):
 
     @model_validator(mode="after")
     def _series_align(self) -> "ChartSpec":
-        """同一图内所有序列的点数必须一致（否则前端画错位）。"""
-        lengths = {len(s.points) for s in self.series}
-        if len(lengths) > 1:
-            raise ValueError(f"chart {self.id} 的各序列点数不一致: {sorted(lengths)}")
+        """每条序列的 values 必须与 periods 等长（前端逐项校验，不等长即判非法）。"""
+        expected = len(self.periods)
+        bad = [s.name for s in self.series if len(s.values) != expected]
+        if bad:
+            raise ValueError(
+                f"chart {self.id} 的 series {bad} 长度与 periods({expected}) 不一致"
+            )
         return self
 
 
@@ -405,12 +474,14 @@ class AdminRefreshResponse(_StrictModel):
 
 
 __all__ = [
+    "ALLOWED_SIGNAL_SEVERITIES",
     "ALLOWED_SIGNAL_TYPES",
+    "SEVERITY_MAP",
+    "SIGNAL_TYPE_MAP",
     "AdminRefreshResponse",
     "AskRequest",
     "AskResponse",
     "ChartKind",
-    "ChartPoint",
     "ChartSeries",
     "ChartSpec",
     "Claim",
@@ -418,11 +489,14 @@ __all__ = [
     "DataSource",
     "ErrorResponse",
     "Evidence",
+    "EvidenceCategory",
     "HealthResponse",
     "RiskDimension",
     "Signal",
     "SignalListResponse",
     "SignalSeverity",
-    "SignalSide",
     "SignalType",
+    "to_evidence_category",
+    "to_severity",
+    "to_signal_type",
 ]

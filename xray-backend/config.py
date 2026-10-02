@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     #:    "文件名无日期"的公告 —— 与"取最近的公告"这个直觉正好相反。
     #:    故默认为 None（取全部，按公告日期倒序由 ANALYSIS_MAX_ANNOUNCEMENTS 截断）。
     ANALYSIS_WINDOW_DAYS: int | None = None
+    #: 拿不到单篇公告直链时的回退：巨潮资讯网该公司公告列表页（真实可达）
+    CNINFO_LIST_URL: str = "https://www.cninfo.com.cn/new/fulltextSearch/full"
     #: 喂给 LLM 的公告条数上限（太多会撑爆上下文 / 太贵）
     ANALYSIS_MAX_ANNOUNCEMENTS: int = 30
     #: 单条公告正文截断长度（字符）
