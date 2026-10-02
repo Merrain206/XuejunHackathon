@@ -38,6 +38,9 @@ def _identity(*_a, **_kw):
 pm = types.ModuleType("pydantic")
 pm.computed_field = _identity
 pm.field_validator = _identity
+# config.py 还用 model_validator 做 DATABASE_PATH -> DB_PATH 别名解析，
+# 桩里必须一并提供，否则导入 config 直接 ImportError。
+pm.model_validator = _identity
 sys.modules["pydantic"] = pm
 
 psm = types.ModuleType("pydantic_settings")

@@ -598,6 +598,312 @@ def get_company_summary(stock_code: str, *, recent: int = 5) -> dict[str, Any] |
     }
 
 
+# ---------------------------------------------------------------------------
+# 新版库（docs/chunks/evidence/meta）查询层
+#
+# ⚠️ 与上面「方案 B」的旧查询并存，不互相影响：
+#   * 旧查询只依赖 8 列 docs（任何版本的库都能跑）；
+#   * 这里的函数需要 chunks / evidence 表 + 扩展列，**全部做能力探测**，
+#     缺表缺列就自动降级（返回空 / None），不会让整个服务起不来。
+#
+# 合规硬约束（数据库同学的要求）：
+#   1. 只读；
+#   2. 参数化 SQL，禁止拼接用户输入；
+#   3. 每次查询必须带 company_code；
+#   4. 默认过滤 parse_status='ok' AND superseded=0。
+# ---------------------------------------------------------------------------
+
+#: 只读查询的默认过滤条件（字符串常量，绝不拼接用户输入）
+_VALID_DOC_FILTER = "parse_status = 'ok' AND superseded = 0"
+
+
+def _columns(con: sqlite3.Connection, table: str) -> set[str]:
+    """某张表的真实列名；表不存在返回空集合。"""
+    try:
+        return {r[1] for r in con.execute(f'PRAGMA table_info("{table}")')}
+    except sqlite3.Error:
+        return set()
+
+
+def _tables(con: sqlite3.Connection) -> set[str]:
+    try:
+        return {
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+            )
+        }
+    except sqlite3.Error:
+        return set()
+
+
+def has_extended_schema(con: sqlite3.Connection | None = None) -> bool:
+    """库是否具备新版结构（chunks 表 + docs 的 parse_status/superseded 列）。
+
+    用于让调用方在旧库上优雅降级，而不是抛异常。
+    """
+    if con is not None:
+        return "chunks" in _tables(con) and {
+            "parse_status",
+            "superseded",
+        }.issubset(_columns(con, "docs"))
+    with connect() as own:
+        return has_extended_schema(own)
+
+
+def _extended_ready(con: sqlite3.Connection) -> bool:
+    """连接级别的能力判断（避免重复开连接）。"""
+    if "chunks" not in _tables(con):
+        return False
+    cols = _columns(con, "docs")
+    return {"parse_status", "superseded"}.issubset(cols)
+
+
+def get_documents(
+    stock_code: str,
+    *,
+    document_type: str | None = None,
+    report_period: str | None = None,
+    include_superseded: bool = False,
+) -> list[dict[str, Any]]:
+    """按公司（可选：文档类型 / 报告期）查询文档。
+
+    默认过滤 parse_status='ok' AND superseded=0。
+    旧库（无这些列）时自动退化为「按 company_code + file_name 关键字」查询。
+    """
+    code = (stock_code or "").strip()
+    if not code:
+        raise ValueError("stock_code 不能为空")
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        if not _extended_ready(con):
+            # 旧库降级：只有 8 列，document_type/report_period 无从过滤
+            rows = list(
+                _rows(
+                    con,
+                    f"SELECT {_SELECT_COLUMNS} FROM docs WHERE company_code = ? ORDER BY id",
+                    (code,),
+                )
+            )
+            url_column = _url_column(con)
+            items = [
+                _row_to_dict(r, body_chars=0, url_column=url_column) for r in rows
+            ]
+            if document_type:
+                items = [i for i in items if document_type.lower() in (i["file_name"] or "").lower()]
+            return items
+
+        cols = _columns(con, "docs")
+        select = ["id", "company_code", "file_name", "rel_path", "page_count",
+                  "created_at", "text_content"]
+        for extra in ("document_type", "report_period", "published_at", "source_url",
+                      "parse_status", "superseded", "url"):
+            if extra in cols and extra not in select:
+                select.append(extra)
+        select = [c for c in select if c in cols]
+
+        where = ["company_code = ?"]
+        params: list[Any] = [code]
+        if not include_superseded:
+            where.append(_VALID_DOC_FILTER)
+        if document_type:
+            where.append("document_type = ?")
+            params.append(document_type)
+        if report_period:
+            where.append("report_period = ?")
+            params.append(report_period)
+
+        sql = (
+            f"SELECT {', '.join(chr(34) + c + chr(34) for c in select)} FROM docs "
+            f"WHERE {' AND '.join(where)} ORDER BY id"
+        )
+        raw = list(_rows(con, sql, tuple(params)))
+
+    out: list[dict[str, Any]] = []
+    for r in raw:
+        item = {k: r[k] for k in r.keys()}
+        item["text_length"] = len(item.get("text_content") or "")
+        item.pop("text_content", None)  # 绝不放全文（合规要求）
+        out.append(item)
+    return out
+
+
+def get_page_text(document_id: int, page_number: int) -> str:
+    """取某文档某一页的原文（chunks 按 chunk_index 拼接）。
+
+    页码是 **PDF 查看器页码**（实测与半年报页脚「N / 269」一致，无需偏移）。
+    取不到返回空串。
+    """
+    if not isinstance(document_id, int) or not isinstance(page_number, int):
+        raise ValueError("document_id / page_number 必须是整数")
+    if page_number < 1:
+        raise ValueError("page_number 必须 >= 1")
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        if "chunks" not in _tables(con):
+            return ""
+        rows = list(
+            _rows(
+                con,
+                'SELECT content FROM chunks WHERE document_id = ? AND page_number = ? '
+                "ORDER BY chunk_index",
+                (document_id, page_number),
+            )
+        )
+    return "\n".join(str(r["content"] or "") for r in rows)
+
+
+def get_paged_text(
+    document_id: int, *, max_pages: int | None = None, max_chars_per_page: int = 1200
+) -> list[dict[str, Any]]:
+    """取某文档的**按页切分**正文（带真实页码），供 LLM 引用页码用。
+
+    为什么需要它：`docs.text_content` 是一整坨文本，没有页码，模型因此**无法**
+    给出真实引用页码（旧代码只好拿 `page_count` 充数 —— 那等于伪造页码）。
+    这里从 `chunks` 表按 `page_number` 拼回每一页，让模型能照实回填 source_page。
+
+    :returns: [{"page": 1, "text": "..."}]，按页码升序；无 chunks 时返回 []
+    """
+    if not isinstance(document_id, int):
+        raise ValueError("document_id 必须是整数")
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        if "chunks" not in _tables(con):
+            return []
+        rows = list(
+            _rows(
+                con,
+                "SELECT page_number, content FROM chunks WHERE document_id = ? "
+                "ORDER BY page_number, chunk_index",
+                (document_id,),
+            )
+        )
+
+    pages: dict[int, list[str]] = {}
+    for r in rows:
+        page = int(r["page_number"] or 0)
+        if page < 1:
+            continue
+        pages.setdefault(page, []).append(str(r["content"] or ""))
+
+    out: list[dict[str, Any]] = []
+    for page in sorted(pages):
+        text = "\n".join(pages[page])
+        if max_chars_per_page and len(text) > max_chars_per_page:
+            text = text[:max_chars_per_page]
+        out.append({"page": page, "text": text})
+        if max_pages is not None and len(out) >= max_pages:
+            break
+    return out
+
+
+def find_pages(document_id: int, needle: str, *, limit: int = 20) -> list[int]:
+    """在某文档里找出含 `needle` 的页码（升序、去重）。
+
+    用于**核验**引用是否真的出现在所引用的那一页，而不是靠人记。
+    参数化 LIKE，needle 里的 % / _ 会被转义。
+    """
+    text = (needle or "").strip()
+    if not text:
+        return []
+    if not isinstance(document_id, int):
+        raise ValueError("document_id 必须是整数")
+
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    with connect() as con:
+        _ensure_docs_table(con)
+        if "chunks" not in _tables(con):
+            return []
+        rows = list(
+            _rows(
+                con,
+                "SELECT DISTINCT page_number FROM chunks WHERE document_id = ? "
+                "AND content LIKE ? ESCAPE '\\' ORDER BY page_number LIMIT ?",
+                (document_id, f"%{escaped}%", limit),
+            )
+        )
+    return [int(r["page_number"]) for r in rows]
+
+
+def document_title(document_id: int) -> str | None:
+    """文档标题（file_name）；查不到返回 None。"""
+    if not isinstance(document_id, int):
+        return None
+    with connect() as con:
+        _ensure_docs_table(con)
+        row = con.execute(
+            "SELECT file_name FROM docs WHERE id = ?", (document_id,)
+        ).fetchone()
+    return str(row["file_name"]) if row and row["file_name"] else None
+
+
+def document_url(document_id: int) -> str | None:
+    """文档真实直链（docs.source_url / url）；没有合法 http(s) 值时返回 None。"""
+    if not isinstance(document_id, int):
+        return None
+    with connect() as con:
+        _ensure_docs_table(con)
+        cols = _columns(con, "docs")
+        for name in ("source_url", "url", "doc_url"):
+            if name not in cols:
+                continue
+            row = con.execute(
+                f'SELECT "{name}" AS u FROM docs WHERE id = ?', (document_id,)
+            ).fetchone()
+            value = str(row["u"]).strip() if row and row["u"] else ""
+            if value.startswith(("http://", "https://")):
+                return value
+    return None
+
+
+def get_evidence(
+    stock_code: str,
+    *,
+    document_id: int | None = None,
+    metric: str | None = None,
+    category: str | None = None,
+    review_status: str | None = None,
+) -> list[dict[str, Any]]:
+    """查询结构化 evidence（含已人工核验的 Demo 证据）。
+
+    ⚠️ 数据库同学的提醒：`value` / `unit` 目前仍可能不准，**不要直接用来出财务结论**；
+    应以 `source_quote` 为准重新核对数字。这里原样返回，由调用方决定是否采用。
+    """
+    code = (stock_code or "").strip()
+    if not code:
+        raise ValueError("stock_code 不能为空")
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        if "evidence" not in _tables(con):
+            return []
+        where = ["company_code = ?"]
+        params: list[Any] = [code]
+        if document_id is not None:
+            where.append("document_id = ?")
+            params.append(document_id)
+        if metric:
+            where.append("metric = ?")
+            params.append(metric)
+        if category:
+            where.append("category = ?")
+            params.append(category)
+        if review_status:
+            where.append("review_status = ?")
+            params.append(review_status)
+        rows = list(
+            _rows(
+                con,
+                f"SELECT * FROM evidence WHERE {' AND '.join(where)} ORDER BY id",
+                tuple(params),
+            )
+        )
+    return [{k: r[k] for k in r.keys()} for r in rows]
+
+
 def db_status() -> dict[str, Any]:
     """给 /health 用的数据源状态；**不抛异常**，把问题写在返回值里。"""
     path = db_path()
@@ -606,6 +912,15 @@ def db_status() -> dict[str, Any]:
         status["announcements"] = count_announcements()
         status["stocks"] = len(get_stocks())
         status["ready"] = True
+        # 新版结构能力（chunks / parse_status / superseded）——旧库上为 False
+        try:
+            with connect() as con:
+                _ensure_docs_table(con)
+                status["extended_schema"] = _extended_ready(con)
+                status["has_chunks"] = "chunks" in _tables(con)
+                status["has_evidence"] = "evidence" in _tables(con)
+        except (DatabaseNotReadyError, sqlite3.Error):
+            status["extended_schema"] = False
     except DatabaseNotReadyError as exc:
         status["ready"] = False
         status["error"] = str(exc).split("\n")[0]
@@ -625,9 +940,17 @@ __all__ = [
     "count_announcements",
     "db_path",
     "db_status",
+    "document_title",
+    "document_url",
+    "find_pages",
     "get_announcements",
     "get_company_summary",
+    "get_documents",
+    "get_evidence",
+    "get_page_text",
+    "get_paged_text",
     "get_stocks",
+    "has_extended_schema",
     "normalize_cn_digits",
     "parse_announce_date",
     "parse_created_at",

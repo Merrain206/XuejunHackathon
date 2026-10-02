@@ -74,80 +74,131 @@ def test_ask_response_has_exactly_six_keys_in_order(analyzed):
 
 
 def test_high_risk_company_surfaces_findings_and_quotes(analyzed):
-    """688583 假 LLM 判为 high：应出现 2 条 finding + 2 条带原文引用的证据。"""
-    payload = post_ask(analyzed, TARGET).json()
+    """缓存的 high 风险结论应能转成合法的 claims / signals / evidence。
 
-    assert payload["claims"], "high 风险公司应有 claims"
+    ⚠️ 走的是 GET /signals（专门暴露缓存结论的接口）。
+       POST /ask 对非稳定问题一律返回固定兜底，不再读缓存 —— 见下面
+       test_ask_unknown_question_returns_fixed_fallback。
+    """
+    payload = analyzed.get(f"/companies/{TARGET}/signals").json()
+
     assert payload["signals"], "high 风险公司应有 signals"
-    assert payload["evidence"], "high 风险公司应有 evidence"
-    assert payload["charts"], "high 风险公司应有 charts"
 
     # 内部规则 S1/S4 映射到前端契约的 divergence/attention
     types = {s["type"] for s in payload["signals"]}
     assert types == {"divergence", "attention"}, f"前端 signal type 不符: {types}"
     assert all(s["severity"] in ("attention", "positive") for s in payload["signals"])
     assert all("side" not in s for s in payload["signals"]), "前端类型里没有 side"
+    for signal in payload["signals"]:
+        assert signal["evidence_ids"], "每条 signal 至少引用 1 条证据"
 
-    # 前端 isEvidence 的硬要求
-    for ev in payload["evidence"]:
+
+def test_cached_quotes_build_valid_evidence(analyzed):
+    """缓存里的 evidence_quotes 经 _build_evidence 后必须满足前端硬要求。"""
+    from ask import _build_evidence
+    from analyzer import load_cache
+    from db import get_announcements
+
+    analysis = load_cache(TARGET, allow_stale=True)
+    assert analysis is not None, "应能读到缓存结论"
+    announcements = get_announcements(TARGET, days=None, limit=None, body_chars=0)
+
+    evidence, mapping = _build_evidence(
+        analysis.get("evidence_quotes") or [], announcements, TARGET
+    )
+
+    assert evidence, "带 source_page 的引用应能生成证据"
+    assert set(mapping) == {"Q1", "Q2"}, f"quote_id 映射不完整：{mapping}"
+    for ev in evidence:
         assert ev["source_quote"], "每条证据必须有原文引用"
         assert ev["document_title"], "证据应带公告文件名"
         assert ev["category"] in ("financial", "business", "company"), ev["category"]
         assert isinstance(ev["source_page"], int) and ev["source_page"] > 0, ev["source_page"]
         assert str(ev["source_url"]).startswith(("http://", "https://")), ev["source_url"]
         assert ev["document_id"], "document_id 不能为空"
-    for claim in payload["claims"]:
-        assert claim["evidence_ids"], "每条 claim 至少 1 个 evidence_id"
-        assert set(claim) == {"id", "text", "evidence_ids"}, "claim 字段须与前端类型一致"
+
+
+def test_evidence_without_source_page_is_dropped(analyzed):
+    """没有可信页码的引用必须被丢弃 —— 绝不用公告总页数冒充引用页码。
+
+    这是旧实现的一个真实缺陷：source_page 曾被写成该公告的 page_count，
+    于是招股书 520 页时每条引用都声称出自第 520 页。
+    """
+    from ask import _build_evidence
+    from db import get_announcements
+
+    announcements = get_announcements(TARGET, days=None, limit=None, body_chars=0)
+    quotes = [
+        {
+            "id": "Q1",
+            "risk_dimension": "盈利质量",
+            "content": "缺页码的引用",
+            "source_quote": "某段原文",
+            "source_id": 1,
+            "source_file": "2023年年度报告.pdf",
+            "source_date": None,
+            # 刻意不给 source_page
+        }
+    ]
+    evidence, mapping = _build_evidence(quotes, announcements, TARGET)
+    assert evidence == [], "缺页码的证据必须被丢弃"
+    assert mapping == {}, "被丢弃的引用不得留下映射（否则 claim 会引用悬空）"
 
 
 def test_answer_includes_cached_summary_and_latest_announcement(analyzed):
-    """answer = 缓存摘要 + 最新公告一行。"""
-    payload = post_ask(analyzed, TARGET).json()
-    answer = payload["answer"]
-
-    assert "high" in answer or "风险" in answer, answer
-    assert "最新公告" in answer, f"answer 应包含最新动态：{answer}"
-    assert TARGET in answer
+    """缓存摘要仍可在 /signals 读到（answer 合成已按新契约收敛到固定兜底）。"""
+    payload = analyzed.get(f"/companies/{TARGET}/signals").json()
+    assert payload["signals"], "应有来自缓存的信号"
+    assert payload["computed_at"], "应报出结论生成时间"
+    assert payload["stock_code"] == TARGET
 
 
-def test_low_or_unknown_risk_allows_empty_arrays(analyzed):
-    """600036 假 LLM 回「无足够信息」：claims/evidence 允许为空数组。"""
+def test_low_or_unknown_risk_company_still_answers(analyzed):
+    """600036 假 LLM 回「无足够信息」：接口仍应正常返回，不报错。"""
     payload = post_ask(analyzed, "600036").json()
 
     assert payload["claims"] == []
     assert payload["signals"] == []
     assert payload["evidence"] == []
     assert payload["charts"] == []
-    assert "无足够信息" in payload["answer"] or "未在公告中找到" in payload["answer"], payload["answer"]
     assert payload["suggested_questions"], "即便无结论也要给建议问题"
     assert_contract(payload)
 
 
-def test_answer_never_empty_even_without_cache(client):
-    """**明确清掉缓存**后，answer 仍必须给出可读说明并提示先跑批处理。"""
+def test_ask_unknown_question_returns_fixed_fallback(client):
+    """非三条稳定问题一律固定兜底，**不读缓存、不让模型补充事实**。
+
+    ⚠️ 历史行为是"读缓存摘要 + 补一句最新公告"，该分支已按
+       BACKEND_NEXT_STEPS.md 移除：否则同一个问题会因为"那天有没有跑过批处理"
+       而得到不同答案，甚至把旧缓存里未核验的结论当成回答发出去。
+    """
     from analyzer import clear_cache
 
-    clear_cache(TARGET)  # 前面用例可能已写入缓存，这里必须清掉才谈得上"无缓存"
+    clear_cache(TARGET)
     payload = post_ask(client, TARGET).json()
 
-    assert payload["answer"].strip()
-    assert "run_night_batch" in payload["answer"], f"应提示先跑批处理：{payload['answer']}"
-    # 无缓存时允许 claims/evidence 为空数组（契约已放开）
+    from demo_handlers import INSUFFICIENT_ANSWER
+
+    assert payload["answer"] == INSUFFICIENT_ANSWER
     assert payload["claims"] == []
     assert payload["evidence"] == []
     assert_contract(payload)
 
 
 def test_normalizes_exchange_suffix(analyzed):
-    """用户可能传 688583.SH，应被归一成库里的 688583。"""
+    """用户可能传 688583.SH，应被归一成库里的 688583。
+
+    ⚠️ 测试库是 8 列合成库（没有 source_url / chunks），确定性处理器会正确地
+       拒绝作答（不伪造链接）→ 落到固定兜底。这里验证的是"没有 404、契约合法"。
+       真正命中处理器的断言在 tests_real/（对着真实库跑）。
+    """
     response = analyzed.post(
-        "/companies/688583.SH/ask", json={"question": "有什么风险？"}
+        "/companies/688583.SH/ask",
+        json={"question": "你的收入结构发生了什么变化？"},
     )
     assert response.status_code == 200, response.text
-    payload = response.json()
-    assert "688583" in payload["answer"]
-    assert_contract(payload)
+    assert response.headers.get("X-XRay-Cache") in {"demo-handler", "insufficient"}
+    assert_contract(response.json())
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +206,37 @@ def test_normalizes_exchange_suffix(analyzed):
 # ---------------------------------------------------------------------------
 
 
-def test_cache_hit_served_from_disk(analyzed):
-    response = post_ask(analyzed, TARGET)
-    assert response.headers.get("X-XRay-Cache") == "hit-cache"
-    assert float(response.headers["X-XRay-Elapsed-Ms"]) >= 0
+def test_ask_never_fabricates_when_real_url_missing(analyzed):
+    """库里没有真实 source_url 时，必须给出兜底而不是编造链接。
+
+    测试库是 8 列合成库：docs 表没有 source_url 列，chunks 也不存在。
+    确定性处理器因此一条证据都建不起来 → 必须回退到固定兜底。
+    这是"不伪造链接/页码"这条红线的行为验证。
+    """
+    from demo_handlers import INSUFFICIENT_ANSWER
+
+    response = post_ask(analyzed, TARGET, question="你最近真的赚钱吗？")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer"] == INSUFFICIENT_ANSWER
+    assert response.headers.get("X-XRay-Cache") == "insufficient"
+    assert payload["evidence"] == [], "拿不到真实链接就不该有 evidence"
+    assert_contract(payload)
+
+
+def test_every_company_gets_valid_contract(analyzed):
+    """任何公司、任何问题都必须返回合法契约（不能白屏、不能悬空引用）。"""
+    from demo_handlers import QUESTION_PROFITABILITY
+
+    for code in CODES:
+        for question in ("你的收入结构发生了什么变化？", QUESTION_PROFITABILITY, "完全无关的问题"):
+            payload = post_ask(analyzed, code, question=question).json()
+            assert_contract(payload)
+            assert payload["answer"].strip()
 
 
 def test_stale_cache_still_usable(analyzed):
-    """把缓存日期改成昨天：ask 仍应能读到（allow_stale），而不是变成无结论。"""
+    """把缓存日期改成昨天：/signals 仍应能读到（allow_stale），而不是变成无结论。"""
     from analyzer import cache_path
 
     path = cache_path(TARGET)
@@ -170,9 +244,8 @@ def test_stale_cache_still_usable(analyzed):
     data["cache_date"] = "2000-01-01"
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-    payload = post_ask(analyzed, TARGET).json()
-    assert payload["claims"], "过期缓存也应能用于展示结论"
-    assert_contract(payload)
+    payload = analyzed.get(f"/companies/{TARGET}/signals").json()
+    assert payload["signals"], "过期缓存也应能用于展示结论"
 
 
 # ---------------------------------------------------------------------------

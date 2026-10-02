@@ -123,6 +123,9 @@ class _StubBaseSettings:
 pm = types.ModuleType("pydantic")
 pm.computed_field = _identity
 pm.field_validator = _identity
+# config.py 还用 model_validator 做 DATABASE_PATH -> DB_PATH 别名解析；
+# 桩里必须一并提供，否则导入 config 直接 ImportError。
+pm.model_validator = _identity
 pm.BaseModel = object
 sys.modules["pydantic"] = pm
 
@@ -265,7 +268,11 @@ check("prompt 要求逐字照抄原文", "逐字照抄" in sp)
 check("prompt 允许回答「无足够信息」", analyzer.INSUFFICIENT in sp)
 check("prompt 禁止编造", "不许编造" in sp)
 check("prompt 限定 S1-S4", all(t in sp for t in ("S1", "S2", "S3", "S4")))
-check("prompt 要求严格 JSON", "严格 JSON" in sp)
+# 必须显式要求"整段回复就是一个 JSON 对象"并禁止 markdown 代码块：
+# 思考模式下模型容易写一段解释性散文，导致解析不到 JSON 而每次降级。
+check("prompt 要求整段输出就是一个 JSON 对象", "整个回复必须是一个 JSON 对象" in sp)
+check("prompt 禁止 markdown 代码块", "```json" in sp)
+check("prompt 要求回填真实 source_page", "source_page" in sp and "总页数" in sp)
 
 prompt = analyzer.build_prompt("688583", [
     {"id": 7, "file_name": "年报.pdf", "created_date": "2024-04-19",

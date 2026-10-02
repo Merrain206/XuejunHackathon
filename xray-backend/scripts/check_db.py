@@ -78,6 +78,11 @@ class _StubBaseSettings:
 pm = types.ModuleType("pydantic")
 pm.computed_field = _identity_decorator
 pm.field_validator = _identity_decorator
+# ⚠️ config.py 用 model_validator 做 DATABASE_PATH → DB_PATH 的别名解析。
+#    桩里必须一并提供，否则 config.py 导入即 ImportError
+#    （"cannot import name 'model_validator' from 'pydantic'"）。
+#    桩成恒等装饰器即可：本脚本验证的是 SQL 与解析逻辑，不验证 pydantic 校验。
+pm.model_validator = _identity_decorator
 sys.modules["pydantic"] = pm
 
 psm = types.ModuleType("pydantic_settings")

@@ -211,6 +211,7 @@ def generate_answer(
     stock_code: str = "",
     signals: Sequence[dict[str, Any]] = (),
     prompt_override: str | None = None,
+    thinking: bool | None = None,
 ) -> LLMResult:
     """调用 DeepSeek 生成回答；**永不抛异常**。
 
@@ -218,6 +219,12 @@ def generate_answer(
       * 默认：按「问题 + 证据」组装问答 prompt（ask.py 的实时问答）；
       * `prompt_override`：直接使用调用方给的完整 user prompt
         （analyzer.py 的公告风险分析用，需要 JSON 输出格式的专门指令）。
+
+    :param thinking: 是否开启思考模式。**None = 用 settings.DEEPSEEK_THINKING**。
+        ⚠️ 实测（deepseek-flash @ 本接入点）：思考模式对"写几句话结论"有帮助，
+           但对"严格 JSON 抽取"是**有害**的 —— 模型会一直推演、把整个 max_tokens
+           预算耗在 reasoning 上，正文永远是空字符串（finish_reason=length）。
+           因此 analyzer 的 JSON 分析显式传 thinking=False。
 
     返回 LLMResult：ok=True 时 text 为模型输出；ok=False 时调用方必须走降级路径，
     并把 result.notice 拼进回答让用户知道发生了什么。
@@ -263,16 +270,36 @@ def generate_answer(
             max_retries=1,
         )
         _bump_call_count()
-        response = client.chat.completions.create(
-            model=settings.DEEPSEEK_MODEL,
-            messages=[
+        # 思考模式：DeepSeek 用 extra_body 传 thinking。
+        # reasoning_effort 只在配置了才带（部分模型/接入点不接受该参数）。
+        use_thinking = settings.DEEPSEEK_THINKING if thinking is None else thinking
+        extra_body: dict[str, Any] = {}
+        if use_thinking:
+            extra_body["thinking"] = {"type": "enabled"}
+        if use_thinking and settings.DEEPSEEK_REASONING_EFFORT:
+            extra_body["reasoning_effort"] = settings.DEEPSEEK_REASONING_EFFORT
+
+        create_kwargs: dict[str, Any] = {
+            "model": settings.DEEPSEEK_MODEL,
+            "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            temperature=settings.LLM_TEMPERATURE,
-            max_tokens=settings.LLM_MAX_TOKENS,
-        )
+            "temperature": settings.LLM_TEMPERATURE,
+            "max_tokens": settings.LLM_MAX_TOKENS,
+        }
+        if extra_body:
+            create_kwargs["extra_body"] = extra_body
+
+        response = client.chat.completions.create(**create_kwargs)
         content = (response.choices[0].message.content or "").strip()
+        # 思考模式下模型会把推理过程放在 reasoning_content，正文仍是 content；
+        # 若正文为空但推理非空，说明只产出了思考，不能当作有效答案。
+        reasoning = ""
+        try:
+            reasoning = (getattr(response.choices[0].message, "reasoning_content", "") or "")
+        except (AttributeError, IndexError):
+            reasoning = ""
         usage: dict[str, Any] = {}
         if getattr(response, "usage", None) is not None:
             usage = {
@@ -280,6 +307,12 @@ def generate_answer(
                 "completion_tokens": getattr(response.usage, "completion_tokens", None),
                 "total_tokens": getattr(response.usage, "total_tokens", None),
             }
+            details = getattr(response.usage, "completion_tokens_details", None)
+            if details is not None:
+                usage["reasoning_tokens"] = getattr(details, "reasoning_tokens", None)
+        if reasoning:
+            # 只记长度，不落库整段思考（体积大且无核验价值）
+            usage["reasoning_chars"] = len(reasoning)
         if not content:
             logger.warning("DeepSeek 返回空内容")
             return LLMResult(text="", ok=False, source="fallback", fallback_reason="empty_response",

@@ -34,7 +34,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from config import settings
-from db import DatabaseNotReadyError, get_announcements, get_stocks
+from db import (
+    DatabaseNotReadyError,
+    get_announcements,
+    get_paged_text,
+    get_stocks,
+)
 from llm_client import LLMResult, generate_answer
 
 logger = logging.getLogger(__name__)
@@ -61,6 +66,13 @@ CACHE_TEMPLATE = "company_risk_{code}.json"
 
 SYSTEM_PROMPT = """你是一名严谨的上市公司公告风险分析师，服务于招股书核验场景。
 
+【输出格式 —— 最重要的一条】
+你的**整个回复必须是一个 JSON 对象**，从第一个字符 `{` 开始，到最后一个字符 `}` 结束。
+* 不要写任何解释、前言、总结或结语；
+* 不要用 markdown 代码块（不要 ```json）；
+* 不要输出 JSON 以外的任何字符。
+思考过程请放在模型内部的 reasoning 里，**不要把推理写进正式回复**。
+
 【绝对硬性规则 —— 违反即视为无效输出】
 1. 你**只能**依据用户提供的【公告原文】作答。不得引入任何外部知识、传闻或推测。
 2. 每一条结论（finding）**必须**附带至少一条**原文引用**（evidence_quotes.source_quote），
@@ -73,7 +85,8 @@ SYSTEM_PROMPT = """你是一名严谨的上市公司公告风险分析师，服�
    S3 人员与经营规模背离（营收增长但社保参保人数下降）
    S4 司法与合规风险（诉讼、被执行、行政处罚等）
    不属于这四类的观察，不要写进 findings。
-5. 只输出**严格 JSON**，不要 markdown 代码块，不要多余解释。
+5. `source_page` 必须填该片段**真正所在**的页码，也就是原文里「[第 N 页]」的 N。
+   不许猜、不许填公告总页数、不许留空；该条公告没有分页信息时填 1。
 
 【输出格式（严格遵守）】
 {
@@ -87,11 +100,14 @@ SYSTEM_PROMPT = """你是一名严谨的上市公司公告风险分析师，服�
   "evidence_quotes": [
     {"id": "Q1", "risk_dimension": "现金真实性|资产健康度|经营稳定性|司法风险|盈利质量|其他",
      "content": "该引用的要点归纳(不超过100字)", "source_quote": "逐字照抄的原文片段",
-     "source_id": 公告id(整数), "source_file": "公告文件名", "source_date": "YYYY-MM-DD 或 null"}
+     "source_id": 公告id(整数), "source_file": "公告文件名", "source_date": "YYYY-MM-DD 或 null",
+     "source_page": 该片段真正所在的页码(整数，取原文里「[第 N 页]」的 N；无分页信息则填 1)}
   ]
 }
 
 如果无足够信息，返回：{"risk_level":"unknown","summary":"无足够信息","findings":[],"evidence_quotes":[]}
+
+再说一次：只输出 JSON，从 `{` 开始，到 `}` 结束，不要有任何其他文字。
 """
 
 
@@ -181,6 +197,8 @@ def build_prompt(stock_code: str, announcements: Sequence[dict[str, Any]],
         f"共 {len(announcements)} 条公告。",
         "",
         "【公告原文】",
+        "（原文按页给出，每页以「[第 N 页]」开头。引用时必须填该片段真正所在的页码，"
+        "不许猜、不许填公告总页数。）",
     ]
     for item in announcements:
         body = (item.get("text_content") or "").strip()
@@ -193,13 +211,26 @@ def build_prompt(stock_code: str, announcements: Sequence[dict[str, Any]],
             f"--- 公告 id={item.get('id')} | 文件={item.get('file_name')} | "
             f"日期={item.get('announce_date') or '未知'} | 页数={item.get('page_count')} ---"
         )
-        lines.append(body)
+        # 有分页信息时按页贴，模型才能给出**真实**引用页码
+        paged = item.get("paged_text") or []
+        if paged:
+            for chunk in paged:
+                lines.append(f"[第 {chunk['page']} 页] {chunk['text']}")
+        else:
+            lines.append(body)
+            lines.append("（本条公告无分页信息；若引用它，source_page 必须填 1。）")
 
     lines.append("")
     lines.append(
         "请严格按 system 里给定的 JSON 格式输出。"
-        "再次强调：每条 finding 必须有对应的 evidence_quotes 原文引用；"
+        "每条 finding 必须有对应的 evidence_quotes 原文引用，"
+        "并照实填写 source_page（原文里「[第 N 页]」的 N）。"
         f"找不到依据就把 summary 写成「{INSUFFICIENT}」并让两个数组为空。"
+    )
+    lines.append("")
+    lines.append(
+        "【再次强调】只输出一个 JSON 对象：第一个字符是 `{`，最后一个字符是 `}`。"
+        "不要写任何解释、前言、结语，不要用 ```json 代码块。"
     )
     return "\n".join(lines)
 
@@ -285,6 +316,10 @@ def validate_analysis(raw: Any) -> dict[str, Any]:
             if qid in seen_qids:
                 qid = f"Q{idx}"
             seen_qids.add(qid)
+            # ★ 模型回填的引用页码；非法/缺失一律置 None，由 ask.py 决定兜底，
+            #   绝不在这一层凭空造一个页码出来。
+            raw_page = _clean_int(item.get("source_page"))
+            source_page = raw_page if (raw_page is not None and raw_page > 0) else None
             quotes.append(
                 {
                     "id": qid,
@@ -294,6 +329,7 @@ def validate_analysis(raw: Any) -> dict[str, Any]:
                     "source_id": _clean_int(item.get("source_id")),
                     "source_file": _clean_str(item.get("source_file"), limit=256) or None,
                     "source_date": _clean_str(item.get("source_date"), limit=32) or None,
+                    "source_page": source_page,
                 }
             )
 
@@ -419,12 +455,28 @@ def analyze_company(
         return result
 
     # ---- 3) 调 LLM ----
+    # 尽量给每条公告附上**按页切分**的原文，模型才能回填真实 source_page；
+    # 分页数据拿不到时退化为整段文本（prompt 里会要求填 1）。
+    if settings.PROMPT_PAGED_TEXT:
+        for item in announcements:
+            try:
+                item["paged_text"] = get_paged_text(
+                    int(item["id"]), max_chars_per_page=settings.PROMPT_CHARS_PER_PAGE
+                )
+            except (DatabaseNotReadyError, ValueError, TypeError, KeyError) as exc:
+                logger.debug("公告 %s 分页正文不可用：%s", item.get("id"), exc)
+
     prompt = build_prompt(code, announcements)
     llm: LLMResult = generate_answer(
         f"分析 {code} 的公告风险",
         evidence=[],
         stock_code=code,
         prompt_override=prompt,
+        # ⚠️ 这里**必须关掉思考模式**：实测 deepseek-flash 在"严格 JSON 抽取"任务上
+        #    会无限推演，把整个 max_tokens 预算（900 甚至 4096）全花在 reasoning 上，
+        #    正文始终为空（finish_reason=length）→ 每次都降级成 empty_response。
+        #    关掉后稳定返回结构化 JSON。
+        thinking=False,
     )
 
     if not llm.ok:

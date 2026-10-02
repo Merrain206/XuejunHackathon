@@ -18,7 +18,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import computed_field, field_validator
+from pydantic import computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ---------------------------------------------------------------------------
@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # ---------------- 数据源：cninfo.db ----------------
     #: 相对路径锚定到 xray-backend/；找不到时会自动尝试 ../data/cninfo.db
     DB_PATH: str = "data/cninfo.db"
+    #: BACKEND_NEXT_STEPS.md 规定用 DATABASE_PATH 配置库位置。
+    #: 两者都支持：DATABASE_PATH 优先，未设置时回落到 DB_PATH（向后兼容）。
+    DATABASE_PATH: str = ""
     #: true = 只认 DB_PATH，不做候选回退（测试"库不存在"场景时用）
     DB_PATH_STRICT: bool = False
     #: 喂给 LLM 的公告时间窗口（天）。**None = 不按时间过滤**（推荐）。
@@ -84,14 +87,30 @@ class Settings(BaseSettings):
     # ---------------- DeepSeek 大模型 ----------------
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
-    REQUEST_TIMEOUT_MS: int = 60_000
-    LLM_MAX_TOKENS: int = 900
+    #: 该接入点实测可用模型：deepseek-flash / deepseek-v4-pro
+    #: （deepseek-chat 与 deepseek-reasoner 也仍被接受）
+    DEEPSEEK_MODEL: str = "deepseek-flash"
+    #: 是否开启思考模式（extra_body={"thinking":{"type":"enabled"}}）。
+    #: 实测 deepseek-flash **默认就返回 reasoning_content**，这里显式声明以保证
+    #: 行为不随服务端默认值变化。
+    DEEPSEEK_THINKING: bool = True
+    #: 思考强度；None 时不传该参数（部分模型不支持）
+    DEEPSEEK_REASONING_EFFORT: str | None = "high"
+    REQUEST_TIMEOUT_MS: int = 120_000
+    #: ⚠️ 思考模式（deepseek-flash + thinking）下，**reasoning token 也从这个上限里扣**。
+    #: 实测：分析 2 条公告并输出 JSON，推理就吃掉 900+ token，正文直接为空
+    #: （finish_reason=stop 但 content 为空 → 被判定 empty_response）。
+    #: 因此上限要给够；上限只是封顶不是目标，给大不会变慢、也不会多花钱。
+    LLM_MAX_TOKENS: int = 4096
     LLM_TEMPERATURE: float = 0.2
     #: false 时不做 LLM 判断，直接给出「无足够信息」的降级结论
     LLM_ENABLED: bool = True
     #: 测试开关：true 时返回固定假响应，不发起任何网络请求
     LLM_FAKE: bool = False
+    #: 喂 prompt 时是否按「[第 N 页]」给出分页正文（让模型能回填真实 source_page）
+    PROMPT_PAGED_TEXT: bool = True
+    #: 每页喂给模型的字符上限（按页切分后单页通常很短）
+    PROMPT_CHARS_PER_PAGE: int = 1200
 
     # ---------------- 分析缓存 ----------------
     #: 缓存目录（同一家公司同一天不重复调用 LLM）
@@ -149,6 +168,20 @@ class Settings(BaseSettings):
         if not path:
             raise ValueError("DB_PATH 不能为空")
         return path
+
+    @model_validator(mode="after")
+    def _resolve_database_path_alias(self) -> "Settings":
+        """DATABASE_PATH（规范名）优先；未设置时保持 DB_PATH 的默认值。
+
+        两个名字都支持是为了兼容既有 .env / 测试；规范名来自
+        BACKEND_NEXT_STEPS.md：DATABASE_PATH=...\\cninfo.db
+        """
+        explicit = (self.DATABASE_PATH or "").strip()
+        if explicit:
+            object.__setattr__(self, "DB_PATH", explicit)
+        else:
+            object.__setattr__(self, "DATABASE_PATH", self.DB_PATH)
+        return self
 
     @field_validator("LOG_LEVEL")
     @classmethod

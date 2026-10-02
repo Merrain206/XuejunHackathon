@@ -35,6 +35,11 @@ exports/
 # .pytest-run 是 pytest 的 basetemp，.pytest-data 放测试库与 scratch（见 tests/conftest.py）
 .pytest-run/
 .pytest-data/
+# tests_real/ 用的是另一套 basetemp / scratch（见 tests_real/conftest.py）：
+# 两套环境必须隔离，否则 basetemp 会被沙箱 ACL 锁住导致收集阶段就报错。
+.pytest-run-real/
+.pytest-data-real/
+.pytest-cache-real/
 .pytest_cache/
 .test-tmp/
 .pytest-tmp*/

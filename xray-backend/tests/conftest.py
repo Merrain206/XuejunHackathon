@@ -280,6 +280,8 @@ FAKE_ANALYSIS_BY_CODE: dict[str, dict] = {
                 "source_id": 1,
                 "source_file": "2023年年度报告.pdf",
                 "source_date": _d(10),
+                # ★ 模型必须回填引用页码；缺失会被 ask.py 按 No Evidence 规则丢弃
+                "source_page": 1,
             },
             {
                 "id": "Q2",
@@ -289,6 +291,7 @@ FAKE_ANALYSIS_BY_CODE: dict[str, dict] = {
                 "source_id": 2,
                 "source_file": "关于涉及诉讼的公告.pdf",
                 "source_date": _d(30),
+                "source_page": 2,
             },
         ],
     },

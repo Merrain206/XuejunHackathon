@@ -47,7 +47,23 @@ def test_system_prompt_demands_verbatim_quotes_and_allows_no_info():
     assert "不许编造" in SYSTEM_PROMPT
     for signal_type in ("S1", "S2", "S3", "S4"):
         assert signal_type in SYSTEM_PROMPT, f"prompt 应说明 {signal_type} 的含义"
-    assert "严格 JSON" in SYSTEM_PROMPT
+
+    # 必须显式要求"整段回复就是一个 JSON 对象"，并禁止 markdown 代码块。
+    # 这两条是实战教训：思考模式下模型会写一段解释性散文，
+    # 导致 analyzer 解析不到 JSON 而每次都降级（parse_failed）。
+    assert "整个回复必须是一个 JSON 对象" in SYSTEM_PROMPT
+    assert "```json" in SYSTEM_PROMPT, "必须点名禁止 ```json 代码块"
+    assert "不要写任何解释" in SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_real_source_page():
+    """必须要求模型回填真实页码 —— 否则 ask.py 会因取不到可信页码而丢弃证据。"""
+    from analyzer import SYSTEM_PROMPT
+
+    assert "source_page" in SYSTEM_PROMPT
+    assert "真正所在" in SYSTEM_PROMPT or "真正" in SYSTEM_PROMPT
+    assert "总页数" in SYSTEM_PROMPT, "必须明确禁止拿公告总页数充数"
+
 
 
 def test_build_prompt_includes_announcement_ids_and_content():

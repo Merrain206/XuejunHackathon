@@ -8,7 +8,7 @@ dsh/
 ├── ai-web-ppt/          AI 网页 PPT 生成器（Node.js + React，端口 8787）
 ├── xray-backend/        X-Ray 企业穿透分析后端（FastAPI + DeepSeek，端口 8000）
 ├── xuejun-hackathon/    Ask the Company 前端 MVP（Next.js 16，端口 3000）
-│   └── data/cninfo.db   公告原文库（11.5 MB，未纳入版本库）
+│   └── data/cninfo.db   公告原文库（116 MB，未纳入版本库）
 ├── .gitattributes       换行符策略（仓库内存 LF）
 └── .gitignore
 ```
@@ -29,17 +29,27 @@ npm run dev          # 或 start.bat / ./start.sh（自动建 .env、构建、�
 
 ## 2. `xray-backend/` — X-Ray 企业穿透分析后端
 
-从公告原文出发，用 DeepSeek 给出**带原文引用**的风险结论；找不到依据时明确回答
-「无足够信息」，绝不编造。
+从公告原文出发给出**带原文引用**的风险结论。三条稳定 Demo 问题由确定性处理器作答
+（**不需要大模型**也能演示）；其余问题返回固定兜底，不让模型补充事实。
 
 ```bash
 cd xray-backend
 python -m pip install -r requirements.txt
-cp .env.example .env          # 填 DEEPSEEK_API_KEY
+cp .env.example .env          # 可选：填 DEEPSEEK_API_KEY
 
-python scripts/run_night_batch.py --demo   # 预读：分析并生成缓存与报告
-python main.py                             # 起服务（:8000）
+python main.py                # 起服务（:8000）—— 三条稳定问题开箱即用
+curl -X POST http://localhost:8000/companies/688583/ask \
+  -H "Content-Type: application/json" -d '{"question":"你最近真的赚钱吗？"}'
 ```
+
+跑测试（**两套必须分别跑**，环境互相隔离：合成库 vs 真实库）：
+
+```bash
+python -m pytest tests        # 合成库：db / 契约 / 批处理 / analyzer
+python -m pytest tests_real   # 真实库：三条 Demo 问题端到端验收
+```
+
+前端联调用的四个响应样例在 `xray-backend/samples/`（由 `scripts/make_samples.py` 生成）。
 
 详见 [`xray-backend/README.md`](xray-backend/README.md)。
 
@@ -68,13 +78,13 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 | 路径 | 说明 |
 | --- | --- |
-| `xuejun-hackathon/data/cninfo.db` | 从 PDF 提取的公告原文库（表 `docs`，126 条）。**未纳入版本库** |
+| `xuejun-hackathon/data/cninfo.db` | 公告原文库（**4 家公司 / 1905 条公告**，表 `docs`+`chunks`+`evidence`+`chunks_fts`）。**未纳入版本库** |
 
 `xray-backend` 会自动找到它 —— `config.Settings.db_file` 按以下顺序解析：
 
 ```
-DB_PATH  →  xray-backend/data/cninfo.db  →  ../data/cninfo.db
-         →  ../xuejun-hackathon/data/cninfo.db   ← 当前生效
+DATABASE_PATH / DB_PATH  →  xray-backend/data/cninfo.db  →  ../data/cninfo.db
+                         →  ../xuejun-hackathon/data/cninfo.db   ← 当前生效
 ```
 
 想确认实际用的是哪个库：

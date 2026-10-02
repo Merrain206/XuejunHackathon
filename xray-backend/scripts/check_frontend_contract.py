@@ -220,25 +220,73 @@ except Exception as exc:  # noqa: BLE001
     print(f"build_answer_payload 抛异常：{type(exc).__name__}: {exc}")
     raise
 
-print("=== 生成的响应（节选）===")
-print("  顶层键:", list(payload.keys()))
-print("  answer:", payload["answer"][:90], "…")
-print("  claims:", len(payload["claims"]), " signals:", len(payload["signals"]),
-      " charts:", len(payload["charts"]), " evidence:", len(payload["evidence"]))
-if payload["evidence"]:
-    ev = payload["evidence"][0]
-    print("  首条 evidence 的关键字段：")
-    for k in ("id", "category", "period", "document_id", "document_title",
-              "source_page", "source_url"):
-        print(f"     {k} = {ev.get(k)!r}")
-if payload["signals"]:
-    print("  首条 signal:", json.dumps(payload["signals"][0], ensure_ascii=False)[:160])
-if payload["charts"]:
-    print("  首条 chart :", json.dumps(payload["charts"][0], ensure_ascii=False)[:200])
+# ---------------------------------------------------------------------------
+# 3b) 四个 Demo 响应都要过前端校验器
+#
+# 三个稳定问题 + 证据不足兜底，逐个走一遍真实链路（含校验器与兜底），
+# 因为它们才是前端联调时实际会拿到的响应。
+# ---------------------------------------------------------------------------
+DEMO_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("收入结构", "你的收入结构发生了什么变化？"),
+    ("盈利质量", "你最近真的赚钱吗？"),
+    ("主要风险", "目前最值得关注的风险是什么？"),
+    ("证据不足", "你的员工喜欢吃水果吗？"),
+)
+
+#: 三条 Demo 事实（招股书/半年报页码）只属于思看科技 688583。
+#: ⚠️ 不能用 stocks[0]：库内公司按代码升序，第一家是 000066，
+#:    拿它问 Demo 问题只会正确地命中兜底，从而误判成失败。
+DEMO_CODE = "688583"
 
 print()
 print("=" * 74)
-print("前端校验器逐项判定")
+print("四个 Demo 响应 · 前端校验器逐包判定")
+print("=" * 74)
+print(f"Demo 公司: {DEMO_CODE}")
+for label, question in DEMO_QUESTIONS:
+    demo_payload, demo_source = ask.build_answer_payload(DEMO_CODE, question=question)
+    passed, reason = is_ask_response(demo_payload)
+    check(
+        f"[{label}] 整包通过前端 isAskApiResponse()",
+        passed,
+        f"{reason} src={demo_source} claims={len(demo_payload['claims'])} "
+        f"signals={len(demo_payload['signals'])} charts={len(demo_payload['charts'])} "
+        f"evidence={len(demo_payload['evidence'])}",
+    )
+    check(f"[{label}] answer 非空", is_non_empty_string(demo_payload.get("answer")))
+    for ev in demo_payload["evidence"]:
+        check(
+            f"[{label}] evidence {ev['id']} 页码为正整数且 URL 合法",
+            isinstance(ev.get("source_page"), int)
+            and ev["source_page"] > 0
+            and is_http_url(ev.get("source_url")),
+            f"page={ev.get('source_page')} url={str(ev.get('source_url'))[:48]}",
+        )
+
+# 三条稳定问题的 Answer 必须互不相同；且前两条要有图、风险问题无图
+_demo_payloads = {
+    label: ask.build_answer_payload(DEMO_CODE, question=q)[0]
+    for label, q in DEMO_QUESTIONS[:3]
+}
+_answers = [p["answer"] for p in _demo_payloads.values()]
+check("三条稳定问题的 Answer 互不相同", len(set(_answers)) == 3, f"{len(set(_answers))} 种")
+check(
+    "收入结构 / 盈利质量 各带 1 张图",
+    len(_demo_payloads["收入结构"]["charts"]) == 1
+    and len(_demo_payloads["盈利质量"]["charts"]) == 1,
+    f"{len(_demo_payloads['收入结构']['charts'])} / {len(_demo_payloads['盈利质量']['charts'])}",
+)
+check("主要风险问题无图表", len(_demo_payloads["主要风险"]["charts"]) == 0)
+check(
+    "兜底回答的四个数组都为空且文案固定",
+    _demo_payloads.get("证据不足") is None
+    and ask.build_answer_payload(DEMO_CODE, question="你的员工喜欢吃水果吗？")[0]["answer"]
+    == "根据目前掌握的信息，我无法可靠回答这个问题。",
+)
+
+print()
+print("=" * 74)
+print("主响应（通用链路）逐项判定")
 print("=" * 74)
 
 ok, why = is_ask_response(payload)

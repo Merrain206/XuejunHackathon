@@ -31,12 +31,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
-from analyzer import (
-    INSUFFICIENT,
-    RISK_HIGH,
-    RISK_MEDIUM,
-    load_cache,
-)
+from analyzer import load_cache
 from config import settings
 from db import (
     DatabaseNotReadyError,
@@ -47,13 +42,12 @@ from db import (
     get_company_summary,
     search_announcements,
 )
+from demo_handlers import build_demo_response, build_insufficient_response
+from response_validator import assert_valid
 from schemas import (
     AdminRefreshResponse,
     AskRequest,
     AskResponse,
-    ChartSeries,
-    ChartSpec,
-    Claim,
     CompanyProfile,
     ErrorResponse,
     Evidence,
@@ -93,14 +87,8 @@ def _db_unavailable(exc: DatabaseNotReadyError) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# 回答合成
+# 由缓存结论合成 signals（GET /companies/{code}/signals 用）
 # ---------------------------------------------------------------------------
-
-#: 无缓存时的提示（不现场调 LLM，避免接口变慢）
-NO_ANALYSIS_HINT = (
-    "该公司暂无预生成的风险分析。请先执行 python scripts/run_night_batch.py --demo（或全量）"
-    "生成分析结论后再提问。"
-)
 
 
 def _signal_type_of(finding: dict[str, Any]) -> str:
@@ -161,8 +149,6 @@ def _build_evidence(
             continue
 
         hit = _lookup_announcement(quote, index)
-        ev_id = f"EV-{len(evidence) + 1:03d}"
-        mapping[str(quote.get("id"))] = ev_id
 
         # document_id：优先公告真实 id；退而用 source_id；再不行用文件名
         if hit is not None:
@@ -179,14 +165,34 @@ def _build_evidence(
         if not source_url.startswith(("http://", "https://")):
             source_url = fallback_url
 
-        # source_page：前端要求 >0 的整数。库里没有"引用所在页"这一信息，
-        # 用公告页数夹取，默认 1（公告起始页），绝不传 null。
-        page = 1
-        if hit is not None:
-            raw_pages = hit.get("page_count")
-            if isinstance(raw_pages, int) and raw_pages > 0:
-                page = raw_pages if raw_pages > 0 else 1
-        page = max(1, page)
+        # source_page：**必须是被引用片段的真实页码**。
+        #
+        # ⚠️ 这里曾经写成「用公告的 page_count 充数」，那是**伪造页码**：
+        #    招股书 520 页时，每条引用都会声称出自第 520 页 —— 点开必然对不上，
+        #    与「不得伪造页码/不得混用不同版本 PDF 页码」的红线直接冲突。
+        #
+        # 现在的顺序：
+        #   1. 用模型回填的 source_page（prompt 已按「[第 N 页]」给出真实分页）；
+        #   2. 该页码必须落在本公告的页数范围内，越界视为不可信 → 丢弃该条证据；
+        #   3. 拿不到可信页码 → **直接丢弃**（宁可不给这条证据，也不编一个页码）。
+        page = quote.get("source_page")
+        if not isinstance(page, int) or page <= 0:
+            logger.warning(
+                "证据 %s 没有可信的 source_page（收到 %r），按 No Evidence 规则丢弃",
+                quote.get("id"),
+                page,
+            )
+            continue
+        total_pages = hit.get("page_count") if hit is not None else None
+        if isinstance(total_pages, int) and total_pages > 0 and page > total_pages:
+            logger.warning(
+                "证据 %s 的 source_page=%s 超出公告 %s 的页数 %s，视为不可信并丢弃",
+                quote.get("id"),
+                page,
+                document_id,
+                total_pages,
+            )
+            continue
 
         period = (
             str(quote.get("source_date") or "").strip()
@@ -194,6 +200,12 @@ def _build_evidence(
             or (str(hit.get("created_date")) if hit and hit.get("created_date") else "")
             or "公告披露期间"
         )
+
+        # ★ 只有通过全部校验才分配 id 并登记映射。
+        #   若在 continue 之前就写 mapping，被丢弃的引用会留下一个指向
+        #   不存在证据的映射 → claim 引用悬空 → 前端整包判非法。
+        ev_id = f"EV-{len(evidence) + 1:03d}"
+        mapping[str(quote.get("id"))] = ev_id
 
         evidence.append(
             {
@@ -326,50 +338,6 @@ def _build_charts(
     ]
 
 
-def _latest_announcement_line(stock_code: str) -> str:
-    """实时查最新公告，补一句「最新动态」。查询失败不影响主回答。"""
-    try:
-        latest = get_announcements(stock_code, days=None, limit=1, body_chars=120)
-    except (DatabaseNotReadyError, ValueError):
-        return ""
-    if not latest:
-        return ""
-    item = latest[0]
-    date_text = item.get("announce_date") or "日期未知"
-    title = item.get("file_name") or "未命名公告"
-    return f"最新公告（{date_text}）：{title}。"
-
-
-def compose_answer(
-    analysis: dict[str, Any] | None,
-    *,
-    stock_code: str,
-    latest_line: str,
-    from_cache: bool,
-) -> str:
-    """合成 answer：缓存摘要 + 最新动态。"""
-    if analysis is None:
-        parts = [NO_ANALYSIS_HINT]
-        if latest_line:
-            parts.append(latest_line)
-        return "".join(parts)
-
-    summary = str(analysis.get("summary") or INSUFFICIENT)
-    level = str(analysis.get("risk_level") or "unknown")
-    findings = analysis.get("findings") or []
-
-    parts = [f"{stock_code}：{summary}"]
-    if findings:
-        parts.append(f"（风险等级：{level}，共 {len(findings)} 条发现）")
-    elif level == "unknown":
-        parts.append("（未在公告中找到足够依据）")
-    if latest_line:
-        parts.append(latest_line)
-    if not from_cache:
-        parts.append("（以下为已有分析结论，非本次实时生成。）")
-    return "".join(parts)
-
-
 def suggest_questions(analysis: dict[str, Any] | None) -> list[str]:
     """建议问题：优先与命中的风险主题相关，再补足到 5 条。"""
     found = {
@@ -394,42 +362,44 @@ def suggest_questions(analysis: dict[str, Any] | None) -> list[str]:
 def build_answer_payload(
     stock_code: str, *, question: str = "", allow_stale_cache: bool = True
 ) -> tuple[dict[str, Any], str]:
-    """组装响应体；返回 (payload, 来源标记)。"""
-    analysis = load_cache(stock_code, allow_stale=allow_stale_cache)
-    source = "hit-cache" if analysis is not None else "miss"
+    """组装响应体；返回 (payload, 来源标记)。
 
-    latest_line = _latest_announcement_line(stock_code)
-    answer = compose_answer(
-        analysis, stock_code=stock_code, latest_line=latest_line, from_cache=analysis is not None
-    )
+    回答优先级（BACKEND_NEXT_STEPS.md 规定）：
+      1. **三条稳定 Demo 问题** → 确定性处理器（demo_handlers），不依赖 LLM 与缓存，
+         毫秒级返回，保证演示一定有内容；
+      2. 其余问题 → **固定兜底文案**，「不让模型补充事实」。
 
-    quotes = (analysis or {}).get("evidence_quotes") or []
-    findings = (analysis or {}).get("findings") or []
+    ⚠️ 曾经这里还有一条「读该公司已生成的风险分析缓存」的分支。按新契约必须去掉：
+       未知问题一律返回固定兜底，否则同一个问题会因为"那天有没有跑过批处理"而
+       得到不同答案，甚至把**旧缓存里未核验的结论**当成回答发出去。
+       批处理产出的风险结论仍可通过 GET /companies/{code}/signals 查看。
 
-    # 取公告行本身，用于补前端硬要求字段（document_id / source_page / source_url）
-    announcements: list[dict[str, Any]] = []
-    if quotes:
-        try:
-            announcements = get_announcements(
-                stock_code, days=None, limit=None, body_chars=0
-            )
-        except (DatabaseNotReadyError, ValueError) as exc:
-            logger.warning("读取公告行失败（source_url/source_page 将走兜底）：%s", exc)
+    ⚠️ `allow_stale_cache` 参数保留是为了兼容调用方签名，现已不参与决策。
+    """
+    code = (stock_code or "").strip()
 
-    evidence, mapping = _build_evidence(quotes, announcements, stock_code)
-    claims = _build_claims(findings, mapping)
-    signals = _build_signals(findings, mapping, answer)
-    charts = _build_charts(analysis or {}, mapping)
+    # ---- 1) 三条稳定问题：确定性回答 ----
+    demo = build_demo_response(code, question)
+    if demo is not None:
+        return _finalize(demo, "demo-handler"), "demo-handler"
 
-    payload = AskResponse(
-        answer=answer,
-        claims=[Claim(**c) for c in claims],
-        signals=[Signal(**s) for s in signals],
-        charts=[ChartSpec(**c) for c in charts],
-        evidence=[Evidence(**e) for e in evidence],
-        suggested_questions=suggest_questions(analysis),
-    ).to_dict()
-    return payload, source
+    # ---- 2) 其余问题：固定兜底（HTTP 仍为 200）----
+    return _finalize(build_insufficient_response(), "insufficient"), "insufficient"
+
+
+def _finalize(payload: dict[str, Any], source: str) -> dict[str, Any]:
+    """统一出口：跑契约校验，失败则退化为兜底回答。
+
+    为什么失败要退化而不是抛 5xx：前端对 5xx 也会降级到 mock，但那样会丢掉
+    「后端其实答得出来」的信息；退化到固定兜底至少语义正确、且不会白屏。
+    校验问题会完整记进日志，便于排查。
+    """
+    try:
+        return assert_valid(payload)
+    except (ValueError, TypeError) as exc:
+        logger.error("响应未通过 No Evidence, No Claim 校验（source=%s），退化为兜底回答：%s",
+                     source, exc)
+        return build_insufficient_response()
 
 
 # ---------------------------------------------------------------------------
@@ -713,9 +683,7 @@ __all__ = [
     "HEADER_SOURCE",
     "ErrorResponse",
     "build_answer_payload",
-    "compose_answer",
     "error_response",
     "normalize_code",
     "router",
-    "suggest_questions",
 ]
