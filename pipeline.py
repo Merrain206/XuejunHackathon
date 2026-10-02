@@ -211,18 +211,51 @@ def step_ingest(conn, args, warn):
     if not args.ingest:
         return
     log("步骤0 下载+解析 PDF 入库 ...")
+    pdf_dir = os.path.join(DATA_ROOT, CODE)
+    os.makedirs(pdf_dir, exist_ok=True)
+    have = {r[0] for r in conn.execute("SELECT file_name FROM docs WHERE company_code=?", (CODE,))}
+    n = 0
+
+    if args.no_network:
+        # 离线模式：直接扫描本地已下载的 PDF 文件
+        log("  离线模式：扫描本地 PDF ...")
+        pdf_files = sorted(f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf"))
+        for fname in pdf_files:
+            if fname in have and not args.rebuild:
+                continue
+            local = os.path.join(pdf_dir, fname)
+            try:
+                text, pc, tabs = parse_pdf(local)
+            except Exception as e:
+                log(f"  跳过 {fname}: {e}"); continue
+            fdate = date_of(fname)
+            title_raw = re.sub(r"^20\d{6}_", "", os.path.splitext(fname)[0])
+            dtype = classify(title_raw)
+            conn.execute(
+                "INSERT INTO docs (company_code, file_name, rel_path, text_content, page_count, "
+                "tables_json, document_type, source_url, published_at, report_period, parse_status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (CODE, fname, local, text, pc, tabs,
+                 dtype, None, fdate, parse_period(title_raw, dtype),
+                 "ok" if (text and len(text) > 200) else "ocr_required"))
+            have.add(fname); n += 1
+            if n % 10 == 0:
+                conn.commit()
+                log(f"  已入库 {n} 份（增量提交）")
+        conn.commit()
+        log(f"  新入库 {n} 份（{CODE}，离线模式）")
+        return
+
+    # 在线模式：从 cninfo 下载
     if not requests:
         warn.append("未安装 requests，无法 --ingest"); return
     try:
         anns = fetch_announcements(CODE)
     except Exception as e:
         warn.append(f"接口失败，无法 ingest：{e}"); log(f"  ⚠️ {e}"); return
-    pdf_dir = os.path.join(DATA_ROOT, CODE)
-    os.makedirs(pdf_dir, exist_ok=True)
-    have = {r[0] for r in conn.execute("SELECT file_name FROM docs WHERE company_code=?", (CODE,))}
-    n = 0
     for a in anns:
-        fname = f"{a['date']}_{re.sub(r'[\\\\/:*?\"<>|]', '', a['title'])[:60]}.pdf"
+        title = a["title"]
+        fname = f"{a['date']}_{re.sub(r'[\\\\/:*?\"<>|]', '', title)[:60]}.pdf"
         if fname in have and not args.rebuild:
             continue
         local = os.path.join(pdf_dir, fname)
@@ -236,10 +269,20 @@ def step_ingest(conn, args, warn):
             text, pc, tabs = parse_pdf(local)
         except Exception as e:
             log(f"  跳过 {fname}: {e}"); continue
+        # published_at = PDF 文件名前面的时间戳 YYYYMMDD（不加工，纯 8 位数字）
+        published_at = date_of(fname) or a["date"]
+        dtype = classify(title)
         conn.execute(
-            "INSERT INTO docs (company_code, file_name, rel_path, text_content, page_count, tables_json) "
-            "VALUES (?,?,?,?,?,?)", (CODE, fname, local, text, pc, tabs))
+            "INSERT INTO docs (company_code, file_name, rel_path, text_content, page_count, "
+            "tables_json, document_type, source_url, published_at, report_period, parse_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (CODE, fname, local, text, pc, tabs,
+             dtype, a["url"], published_at, parse_period(title, dtype),
+             "ok" if (text and len(text) > 200) else "ocr_required"))
         have.add(fname); n += 1
+        if n % 10 == 0:
+            conn.commit()
+            log(f"  已入库 {n} 份（增量提交）")
     conn.commit()
     log(f"  新入库 {n} 份（{CODE}）")
 
@@ -278,13 +321,21 @@ def step_meta(conn, args, warn):
         if best and score >= 0.6:
             dt = classify(best["title"])
             conn.execute("UPDATE docs SET source_url=?, published_at=?, document_type=?, report_period=? WHERE id=?",
-                         (best["url"], f"{best['date'][:4]}-{best['date'][4:6]}-{best['date'][6:]}",
+                         (best["url"], best["date"],
                           dt, parse_period(best["title"], dt), did))
             matched += 1
         else:
             dt = classify(os.path.splitext(fname)[0])
             conn.execute("UPDATE docs SET document_type=?, published_at=? WHERE id=? AND document_type IS NULL",
-                         (dt, f"{fdate[:4]}-{fdate[4:6]}-{fdate[6:]}" if fdate else None, did))
+                         (dt, fdate if fdate else None, did))
+    conn.commit()
+
+    # 归一化 published_at 为 YYYYMMDD 8位纯数字格式
+    for did, pa in conn.execute("SELECT id, published_at FROM docs WHERE company_code=? "
+                                "AND published_at IS NOT NULL AND published_at != ''", (CODE,)).fetchall():
+        digits = re.sub(r"\D", "", pa)
+        if len(digits) == 8 and digits != pa:
+            conn.execute("UPDATE docs SET published_at=? WHERE id=?", (digits, did))
     conn.commit()
 
     conn.execute("UPDATE docs SET parse_status='ocr_required' "
@@ -357,10 +408,18 @@ def chunk_page(text):
 def step_chunks(conn, args, warn):
     log("步骤2/4 拆页建索引 ...")
     if args.rebuild:
-        conn.execute("DROP TABLE IF EXISTS chunks_fts")
-        conn.execute("DELETE FROM chunks"); conn.commit()
-    if conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0 and not args.rebuild:
-        log("  chunks 已存在，跳过（--rebuild 可重建）"); return
+        chunk_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM chunks WHERE company_code=?", (CODE,)).fetchall()]
+        if chunk_ids:
+            batch_size = 500
+            for i in range(0, len(chunk_ids), batch_size):
+                batch = chunk_ids[i:i+batch_size]
+                placeholders = ",".join("?" * len(batch))
+                conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({placeholders})", batch)
+        conn.execute("DELETE FROM chunks WHERE company_code=?", (CODE,))
+        conn.commit()
+    if conn.execute("SELECT COUNT(*) FROM chunks WHERE company_code=?", (CODE,)).fetchone()[0] > 0 and not args.rebuild:
+        log(f"  chunks 已存在（{CODE}），跳过（--rebuild 可重建）"); return
 
     try:
         import jieba; mode = "jieba"
@@ -492,9 +551,10 @@ def llm_extract(conn, scope_sql):
 def step_evidence(conn, args, warn):
     log("步骤3/4 抽取 Evidence ...")
     if args.rebuild:
-        conn.execute("DELETE FROM evidence"); conn.commit()
-    if conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] > 0 and not args.rebuild:
-        log("  evidence 已存在，跳过（--rebuild 可重抽）"); return
+        conn.execute("DELETE FROM evidence WHERE company_code=?", (CODE,))
+        conn.commit()
+    if conn.execute("SELECT COUNT(*) FROM evidence WHERE company_code=?", (CODE,)).fetchone()[0] > 0 and not args.rebuild:
+        log(f"  evidence 已存在（{CODE}），跳过（--rebuild 可重抽）"); return
     scope_sql = "" if args.scope == "all" else "AND d.document_type IN ('annual_report','semiannual_report')"
     a = rule_extract(conn, scope_sql.replace("d.", "")); log(f"  规则抽取：{a} 条")
     b = llm_extract(conn, scope_sql) if args.with_llm else 0
