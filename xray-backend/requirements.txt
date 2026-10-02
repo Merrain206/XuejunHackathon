@@ -1,0 +1,25 @@
+# X-Ray 企业穿透分析 · 后端依赖
+# 安装： py -m pip install -r requirements.txt
+# 要求： Python 3.10+（开发实测 3.14）
+
+# ---------- Web 框架 ----------
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+pydantic>=2.7,<3.0            # 硬性要求 v2（BaseModel + field_validator，禁止 v1）
+pydantic-settings>=2.3,<3.0
+
+# ---------- HTTP 客户端 ----------
+# 仅 llm_client.py 使用（调用 DeepSeek 走 OpenAI 兼容协议）
+httpx>=0.27
+
+# ---------- 大模型 ----------
+openai>=1.40
+
+# ---------- 测试 ----------
+pytest>=8.0
+
+# ---------- 说明 ----------
+# * 数据源是 data/cninfo.db（SQLite），用标准库 sqlite3 只读访问，**不需要** ORM，
+#   因此不再依赖 SQLAlchemy。
+# * 调度已移出应用：生产环境由系统 cron 调用 scripts/run_night_batch.py，
+#   因此不再依赖 APScheduler。

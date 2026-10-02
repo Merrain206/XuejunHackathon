@@ -1,0 +1,46 @@
+{
+  "company": "688583",
+  "note": "由 scripts/make_samples.py 自动生成，勿手改；改了请重跑生成脚本。",
+  "samples": [
+    {
+      "file": "sample_structure.json",
+      "question": "你的收入结构发生了什么变化？",
+      "label": "收入结构",
+      "source": "demo-handler",
+      "claims": 3,
+      "signals": 1,
+      "charts": 1,
+      "evidence": 3
+    },
+    {
+      "file": "sample_profitability.json",
+      "question": "你最近真的赚钱吗？",
+      "label": "盈利质量",
+      "source": "demo-handler",
+      "claims": 3,
+      "signals": 1,
+      "charts": 1,
+      "evidence": 3
+    },
+    {
+      "file": "sample_risk.json",
+      "question": "目前最值得关注的风险是什么？",
+      "label": "主要风险",
+      "source": "demo-handler",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "sample_insufficient.json",
+      "question": "你的员工喜欢吃水果吗？",
+      "label": "证据不足（固定兜底）",
+      "source": "insufficient",
+      "claims": 0,
+      "signals": 0,
+      "charts": 0,
+      "evidence": 0
+    }
+  ]
+}

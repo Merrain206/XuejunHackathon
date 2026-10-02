@@ -1,0 +1,60 @@
+# ---- 机密与本地配置 ----
+.env
+.env.local
+.env.*.local
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# ---- 数据库（含 WAL/SHM 边车文件）----
+xray.db
+xray.db-wal
+xray.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- 运行期产出 ----
+logs/
+*.log
+cache/
+exports/
+*.pptx
+
+# ---- 测试临时目录 ----
+# .pytest-run 是 pytest 的 basetemp，.pytest-data 放测试库与 scratch（见 tests/conftest.py）
+.pytest-run/
+.pytest-data/
+# tests_real/ 用的是另一套 basetemp / scratch（见 tests_real/conftest.py）：
+# 两套环境必须隔离，否则 basetemp 会被沙箱 ACL 锁住导致收集阶段就报错。
+.pytest-run-real/
+.pytest-data-real/
+.pytest-cache-real/
+.pytest_cache/
+.test-tmp/
+.pytest-tmp*/
+# pytest 在无法写 .pytest_cache 时会创建的空目录（受限环境下沙箱所致）
+pytest-cache-files-*/
+
+# ---- 数据源（体积大、由外部提供，不入版本库）----
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
