@@ -1,6 +1,6 @@
 # Ask the Company
 
-思看科技（688583）的可验证企业问答 Demo。仓库包含 Next.js 前端、FastAPI 后端和 SQLite 数据管道。当前版本默认使用经公开招股书和 2025 年半年度报告核验的 Mock Evidence；配置后端地址后会自动请求 FastAPI，后端不可用时自动降级为演示数据。
+面向思看科技（688583）、恒生电子（600570）、中国长城（000066）和贝达药业（300558）的可验证企业问答 Demo。仓库包含 Next.js 前端、FastAPI 后端和 SQLite 数据管道。思看科技默认使用经公开招股书和 2025 年半年度报告核验的 Mock Evidence；其余公司依赖动态 Evidence 服务，不会降级到思看科技演示数据。
 
 ## 本地运行
 
@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-打开 `http://localhost:3000`，根路径会跳转到 `/company/688583`。
+打开 `http://localhost:3000`，根路径会跳转到 `/company/688583`。也可以通过页面内的公司切换入口访问另外三家公司。
 
 ## 连接 FastAPI
 
@@ -27,6 +27,8 @@ Content-Type: application/json
 
 {"question":"你的收入结构发生了什么变化？"}
 ```
+
+请求路径中的公司代码随当前页面切换，前端超时为 45 秒。思看科技请求失败时回退到已核验 Demo；其他公司请求失败时只显示证据不足/服务不可用状态。
 
 响应字段采用 Python 友好的 snake_case：
 
@@ -79,7 +81,7 @@ Content-Type: application/json
 
 所有 Claim 和 Signal 必须包含至少一个真实 `evidence_id`。`source_url` 返回裸 PDF 地址，前端根据 `source_page` 统一追加页码锚点。没有足够证据时，后端应返回空数组和固定兜底回答。
 
-前端通过 `sourceMode` 区分三种数据状态：`api`（真实后端）、`mock`（未配置后端）和 `fallback`（后端异常后自动降级）。`sourceMode` 是前端适配层字段，不要求后端返回。
+前端通过 `sourceMode` 区分四种数据状态：`api`（真实后端）、`mock`（思看科技未配置后端时的演示数据）、`fallback`（思看科技后端异常后的已核验降级数据）和 `unavailable`（其他公司动态证据服务不可用）。`sourceMode` 是前端适配层字段，不要求后端返回。
 
 当前稳定演示问题：
 

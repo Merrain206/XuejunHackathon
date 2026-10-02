@@ -1,0 +1,559 @@
+{
+  "generated_at": "2026-10-02 20:38:49",
+  "schema": "ask-the-company/companies.json@1",
+  "note": "exchange/board 由证券代码规则推导（exchange_source=code_rule），不是公告原文；industry 未作断言。所有计数为数据库实测值。",
+  "companies": [
+    {
+      "code": "688583",
+      "name": "思看科技",
+      "exchange": "上交所",
+      "board": "科创板",
+      "exchange_source": "code_rule",
+      "industry": null,
+      "industry_source": "not_asserted",
+      "available_metrics": [
+        "accounts_receivable",
+        "debt_ratio",
+        "eps",
+        "equity_attr",
+        "gross_margin",
+        "inventory",
+        "net_profit",
+        "net_profit_attr",
+        "net_profit_deducted",
+        "operating_cash_flow",
+        "rd_expense",
+        "rd_investment",
+        "rd_ratio",
+        "revenue",
+        "risk_downstream_demand",
+        "risk_product_mix",
+        "risk_tech_edge",
+        "total_assets"
+      ],
+      "metric_count": 18,
+      "latest_report_period": "2026H1",
+      "latest_report": {
+        "report_period": "2026H1",
+        "published_at": "20260826",
+        "document_type": "semiannual_report",
+        "document_id": 135,
+        "document_title": "20260826_2026年半年度报告.pdf",
+        "page_count": 221,
+        "source_url": "http://static.cninfo.com.cn/finalpage/2026-08-26/1225503004.PDF"
+      },
+      "counts": {
+        "documents": 312,
+        "valid_documents": 175,
+        "chunks": 1624,
+        "evidence": 286
+      },
+      "evidence_review_status": {
+        "auto": 283,
+        "verified": 3
+      },
+      "answerable_questions": [
+        {
+          "id": "revenue",
+          "question": "你的收入结构和变化是什么？",
+          "required_metrics": [
+            "revenue"
+          ],
+          "covered_metrics": [
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "profit",
+          "question": "你最近真的赚钱吗？",
+          "required_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "covered_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "4/4"
+        },
+        {
+          "id": "assets",
+          "question": "你的资产规模和资产负债情况如何？",
+          "required_metrics": [
+            "total_assets",
+            "debt_ratio"
+          ],
+          "covered_metrics": [
+            "total_assets",
+            "debt_ratio"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "2/2"
+        },
+        {
+          "id": "eps",
+          "question": "你的每股收益表现如何？",
+          "required_metrics": [
+            "eps"
+          ],
+          "covered_metrics": [
+            "eps"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "rd",
+          "question": "你的研发投入情况如何？",
+          "required_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "covered_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "3/3"
+        },
+        {
+          "id": "working_capital",
+          "question": "你的应收账款和存货情况如何？",
+          "required_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "covered_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "2/2"
+        }
+      ]
+    },
+    {
+      "code": "600570",
+      "name": "恒生电子",
+      "exchange": "上交所",
+      "board": "主板",
+      "exchange_source": "code_rule",
+      "industry": null,
+      "industry_source": "not_asserted",
+      "available_metrics": [
+        "accounts_receivable",
+        "eps",
+        "equity_attr",
+        "inventory",
+        "net_profit",
+        "net_profit_attr",
+        "net_profit_deducted",
+        "operating_cash_flow",
+        "rd_expense",
+        "rd_investment",
+        "revenue",
+        "total_assets"
+      ],
+      "metric_count": 12,
+      "latest_report_period": "2026H1",
+      "latest_report": {
+        "report_period": "2026H1",
+        "published_at": "20260826",
+        "document_type": "semiannual_report",
+        "document_id": 1890,
+        "document_title": "20260826_恒生电子股份有限公司2026年半年度报告摘要.pdf",
+        "page_count": 4,
+        "source_url": "http://static.cninfo.com.cn/finalpage/2026-08-26/1225505997.PDF"
+      },
+      "counts": {
+        "documents": 564,
+        "valid_documents": 500,
+        "chunks": 801,
+        "evidence": 116
+      },
+      "evidence_review_status": {
+        "auto": 116
+      },
+      "answerable_questions": [
+        {
+          "id": "revenue",
+          "question": "你的收入结构和变化是什么？",
+          "required_metrics": [
+            "revenue"
+          ],
+          "covered_metrics": [
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "profit",
+          "question": "你最近真的赚钱吗？",
+          "required_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "covered_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "4/4"
+        },
+        {
+          "id": "assets",
+          "question": "你的资产规模和资产负债情况如何？",
+          "required_metrics": [
+            "total_assets",
+            "debt_ratio"
+          ],
+          "covered_metrics": [
+            "total_assets"
+          ],
+          "missing_metrics": [
+            "debt_ratio"
+          ],
+          "answerable": false,
+          "coverage": "1/2"
+        },
+        {
+          "id": "eps",
+          "question": "你的每股收益表现如何？",
+          "required_metrics": [
+            "eps"
+          ],
+          "covered_metrics": [
+            "eps"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "rd",
+          "question": "你的研发投入情况如何？",
+          "required_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "covered_metrics": [
+            "rd_expense",
+            "rd_investment"
+          ],
+          "missing_metrics": [
+            "rd_ratio"
+          ],
+          "answerable": false,
+          "coverage": "2/3"
+        },
+        {
+          "id": "working_capital",
+          "question": "你的应收账款和存货情况如何？",
+          "required_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "covered_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "2/2"
+        }
+      ]
+    },
+    {
+      "code": "000066",
+      "name": "中国长城",
+      "exchange": "深交所",
+      "board": "主板",
+      "exchange_source": "code_rule",
+      "industry": null,
+      "industry_source": "not_asserted",
+      "available_metrics": [
+        "accounts_receivable",
+        "debt_ratio",
+        "eps",
+        "equity_attr",
+        "inventory",
+        "net_profit",
+        "net_profit_attr",
+        "net_profit_deducted",
+        "operating_cash_flow",
+        "revenue",
+        "total_assets"
+      ],
+      "metric_count": 11,
+      "latest_report_period": "2026H1",
+      "latest_report": {
+        "report_period": "2026H1",
+        "published_at": "20260829",
+        "document_type": "semiannual_report",
+        "document_id": 321,
+        "document_title": "20260829_2026年半年度报告摘要.pdf",
+        "page_count": 4,
+        "source_url": "http://static.cninfo.com.cn/finalpage/2026-08-29/1225525192.PDF"
+      },
+      "counts": {
+        "documents": 481,
+        "valid_documents": 461,
+        "chunks": 282,
+        "evidence": 52
+      },
+      "evidence_review_status": {
+        "auto": 52
+      },
+      "answerable_questions": [
+        {
+          "id": "revenue",
+          "question": "你的收入结构和变化是什么？",
+          "required_metrics": [
+            "revenue"
+          ],
+          "covered_metrics": [
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "profit",
+          "question": "你最近真的赚钱吗？",
+          "required_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "covered_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "4/4"
+        },
+        {
+          "id": "assets",
+          "question": "你的资产规模和资产负债情况如何？",
+          "required_metrics": [
+            "total_assets",
+            "debt_ratio"
+          ],
+          "covered_metrics": [
+            "total_assets",
+            "debt_ratio"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "2/2"
+        },
+        {
+          "id": "eps",
+          "question": "你的每股收益表现如何？",
+          "required_metrics": [
+            "eps"
+          ],
+          "covered_metrics": [
+            "eps"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "rd",
+          "question": "你的研发投入情况如何？",
+          "required_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "covered_metrics": [],
+          "missing_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "answerable": false,
+          "coverage": "0/3"
+        },
+        {
+          "id": "working_capital",
+          "question": "你的应收账款和存货情况如何？",
+          "required_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "covered_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "2/2"
+        }
+      ]
+    },
+    {
+      "code": "300558",
+      "name": "贝达药业",
+      "exchange": "深交所",
+      "board": "创业板",
+      "exchange_source": "code_rule",
+      "industry": null,
+      "industry_source": "not_asserted",
+      "available_metrics": [
+        "eps",
+        "equity_attr",
+        "net_profit_attr",
+        "net_profit_deducted",
+        "operating_cash_flow",
+        "revenue",
+        "total_assets"
+      ],
+      "metric_count": 7,
+      "latest_report_period": "2026H1",
+      "latest_report": {
+        "report_period": "2026H1",
+        "published_at": "20260821",
+        "document_type": "semiannual_report",
+        "document_id": 1332,
+        "document_title": "20260821_2026年半年度报告摘要.pdf",
+        "page_count": 6,
+        "source_url": "http://static.cninfo.com.cn/finalpage/2026-08-21/1225487672.PDF"
+      },
+      "counts": {
+        "documents": 548,
+        "valid_documents": 533,
+        "chunks": 138,
+        "evidence": 49
+      },
+      "evidence_review_status": {
+        "auto": 49
+      },
+      "answerable_questions": [
+        {
+          "id": "revenue",
+          "question": "你的收入结构和变化是什么？",
+          "required_metrics": [
+            "revenue"
+          ],
+          "covered_metrics": [
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "profit",
+          "question": "你最近真的赚钱吗？",
+          "required_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "covered_metrics": [
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "revenue"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "4/4"
+        },
+        {
+          "id": "assets",
+          "question": "你的资产规模和资产负债情况如何？",
+          "required_metrics": [
+            "total_assets",
+            "debt_ratio"
+          ],
+          "covered_metrics": [
+            "total_assets"
+          ],
+          "missing_metrics": [
+            "debt_ratio"
+          ],
+          "answerable": false,
+          "coverage": "1/2"
+        },
+        {
+          "id": "eps",
+          "question": "你的每股收益表现如何？",
+          "required_metrics": [
+            "eps"
+          ],
+          "covered_metrics": [
+            "eps"
+          ],
+          "missing_metrics": [],
+          "answerable": true,
+          "coverage": "1/1"
+        },
+        {
+          "id": "rd",
+          "question": "你的研发投入情况如何？",
+          "required_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "covered_metrics": [],
+          "missing_metrics": [
+            "rd_expense",
+            "rd_investment",
+            "rd_ratio"
+          ],
+          "answerable": false,
+          "coverage": "0/3"
+        },
+        {
+          "id": "working_capital",
+          "question": "你的应收账款和存货情况如何？",
+          "required_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "covered_metrics": [],
+          "missing_metrics": [
+            "accounts_receivable",
+            "inventory"
+          ],
+          "answerable": false,
+          "coverage": "0/2"
+        }
+      ]
+    }
+  ]
+}
