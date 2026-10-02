@@ -10,15 +10,15 @@
 因此把"前端已人工核验过的两份上交所原始 PDF"固化成常量，并逐页核验（见
 `demo_handlers` 的 `verify_facts()`）：
 
-  * 收入结构 → 上交所《招股说明书（注册稿）》，PDF 查看器第 321/322/323 页；
+  * 收入结构 → 上交所《招股说明书（注册稿）》，PDF 查看器第 321/322/324 页；
   * 盈利质量 → 上交所《2025 年半年度报告》，PDF 查看器第 8、9 页；
-  * 主要风险 → 上交所《2025 年半年度报告》，PDF 查看器第 43 页。
+  * 主要风险 → 上交所《2025 年半年度报告》，PDF 查看器第 2、43 页。
 
 核验方式（本轮实测，结论可复现）：
   * 招股书注册稿 506 页，正文页脚为「1-1-320/321/322」，即 **页脚号 = 查看器号 − 1**；
     用 pypdf 逐页抽取文本，三条原文的落点与上表一致。
   * 半年报 269 页，与 `cninfo.db` 的 chunks 表为同一份文件（首页「N / 269」页脚
-    与 chunks 的 page_number 完全一致），所以三条原文既能核到页，也能核到字。
+    与 chunks 的 page_number 完全一致），所以相关原文既能核到页，也能核到字。
 
 红线
 ----
@@ -51,22 +51,6 @@ class VerifiedSource:
     db_title_hint: str
     #: 口径说明（为什么会是这个页码），写给后来人看
     note: str
-
-    def url_for_page(self, page: int) -> str:
-        """带页码锚点的地址。
-
-        上交所静态 PDF 不一定支持 `#page=` 片段，但主流 PDF 查看器（Chrome 内置、
-        Acrobat）都认，属于"锦上添花"：识别不了时也只是打开第一页，不会 404。
-
-        ⚠️ 必须先剥掉可能已存在的 fragment：前端 `company-experience.tsx` 会自己
-        拼 `${item.sourceUrl}#page=${item.sourcePage}`，如果这里也带一个，
-        就会变成 `...#page=8#page=8` —— 链接虽然还能打开，但页码失效。
-        """
-        base = self.url.split("#", 1)[0]
-        if page < 1:
-            return base
-        return f"{base}#page={page}"
-
 
 #: 上交所《思看科技首次公开发行股票并在科创板上市招股说明书（注册稿）》2024-08-16
 #: 前端 mock-data.ts 里已核验的 `prospectusUrl`，逐字一致。

@@ -49,11 +49,11 @@ const structureEvidence: Evidence[] = [
     id: "EV-STR-003",
     category: "financial",
     period: "2021—2023",
-    content: "2023 年主营业务收入同比增长 31.88%，其中跟踪式产品收入增长 94.62%，收入结构变化发生在整体增长之中。",
+    content: "主营业务收入由 2021 年的 16,088.21 万元增至 2023 年的 27,170.18 万元，收入结构变化发生在整体增长之中。",
     documentTitle: "首次公开发行股票并在科创板上市招股说明书（注册稿）",
     sourcePage: 321,
     sourceQuote:
-      "如上表所示，2023年，公司主营业务收入同比增长31.88%，主要系跟踪式3D视觉数字化产品销售收入同比增长94.62%",
+      "合计27,170.18100.00%20,602.47100.00%16,088.21100.00%",
     sourceUrl: prospectusUrl,
   },
 ];
@@ -97,6 +97,17 @@ const profitabilityEvidence: Evidence[] = [
 
 const riskEvidence: Evidence[] = [
   {
+    id: "EV-RISK-000",
+    category: "business",
+    period: "2025 年上半年",
+    content: "报告期内不存在对公司生产经营构成实质性影响的重大风险。",
+    documentTitle: "思看科技2025年半年度报告",
+    sourcePage: 2,
+    sourceQuote:
+      "报告期内，不存在对公司生产经营构成实质性影响的重大风险。公司已于本报告中详细描述了存在的相关风险",
+    sourceUrl: halfYearReportUrl,
+  },
+  {
     id: "EV-RISK-001",
     category: "business",
     period: "2025 年上半年",
@@ -137,6 +148,7 @@ const structureResponse: Omit<AskResponse, "sourceMode"> = {
   claims: [
     { id: "CL-STR-001", text: "便携式 3D 扫描仪收入增长，但收入占比持续下降。", evidenceIds: ["EV-STR-001"] },
     { id: "CL-STR-002", text: "跟踪式 3D 视觉数字化产品正在成为更重要的收入来源。", evidenceIds: ["EV-STR-002"] },
+    { id: "CL-STR-003", text: "同期主营业务收入总额由 16,088.21 万元增至 27,170.18 万元，收入结构变化发生在整体增长之中。", evidenceIds: ["EV-STR-003"] },
   ],
   signals: [
     {
@@ -205,6 +217,7 @@ const riskResponse: Omit<AskResponse, "sourceMode"> = {
   answer:
     "根据目前掌握的信息，公司没有披露已经发生、足以对生产经营构成实质影响的重大风险。更值得持续关注的是技术差异化能否维持，以及产品结构和下游需求变化是否压低毛利率或收入。公司明确提示：低毛利率产品占比上升会影响整体毛利率；技术优势减弱会影响售价和市场份额；航空航天、汽车制造等下游需求收缩可能拖累收入。 以上均为公司披露的风险提示，不代表相关风险已经发生。",
   claims: [
+    { id: "CL-RISK-000", text: "报告期内，公司不存在对生产经营构成实质性影响的重大风险。", evidenceIds: ["EV-RISK-000"] },
     { id: "CL-RISK-001", text: "低毛利率产品占比上升可能拖累整体毛利率。", evidenceIds: ["EV-RISK-001"] },
     { id: "CL-RISK-002", text: "技术优势减弱可能影响售价和市场占有率。", evidenceIds: ["EV-RISK-002"] },
     { id: "CL-RISK-003", text: "重要下游行业需求下降可能导致公司收入下降。", evidenceIds: ["EV-RISK-003"] },
@@ -216,7 +229,7 @@ const riskResponse: Omit<AskResponse, "sourceMode"> = {
       title: "增长依赖持续技术领先与下游需求",
       severity: "attention",
       description: "公司当前未披露已发生的重大经营风险，但技术差异化、产品毛利结构和下游景气度是需要继续验证的变量。",
-      evidenceIds: ["EV-RISK-001", "EV-RISK-002", "EV-RISK-003"],
+      evidenceIds: ["EV-RISK-000", "EV-RISK-001", "EV-RISK-002", "EV-RISK-003"],
     },
   ],
   charts: [],

@@ -27,10 +27,10 @@
       "question": "目前最值得关注的风险是什么？",
       "label": "主要风险",
       "source": "demo-handler",
-      "claims": 3,
+      "claims": 4,
       "signals": 1,
       "charts": 0,
-      "evidence": 3
+      "evidence": 4
     },
     {
       "file": "sample_insufficient.json",

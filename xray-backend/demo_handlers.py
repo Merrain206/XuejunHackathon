@@ -26,9 +26,9 @@
 
 来源与页码口径（本轮逐页核验，PDF 查看器页码）
 ---------------------------------------------
-* 收入结构 → 上交所招股说明书（注册稿），第 **321 / 322 / 323** 页；
+* 收入结构 → 上交所招股说明书（注册稿），第 **321 / 322 / 324** 页；
 * 盈利质量 → 上交所 2025 年半年度报告，第 **8 / 9** 页；
-* 主要风险 → 上交所 2025 年半年度报告，第 **43** 页。
+* 主要风险 → 上交所 2025 年半年度报告，第 **2 / 43** 页。
 """
 
 from __future__ import annotations
@@ -83,9 +83,9 @@ QUESTION_RISK = "目前最值得关注的风险是什么？"
 #    直接按 chunks.page_number 核验。
 # ---------------------------------------------------------------------------
 
-#: 招股说明书（注册稿）—— 收入结构，PDF 查看器第 321/322/323 页
+#: 招股说明书（注册稿）—— 收入结构，PDF 查看器第 321/322/324 页
 _PROSPECTUS_DOC = 299
-#: 2025 年半年度报告 —— 盈利质量（第 8/9 页）与风险提示（第 43 页）
+#: 2025 年半年度报告 —— 盈利质量（第 8/9 页）与风险提示（第 2/43 页）
 _HALF_YEAR_DOC = 15
 
 _FACTS: dict[str, dict[str, Any]] = {
@@ -123,13 +123,10 @@ _FACTS: dict[str, dict[str, Any]] = {
         "category": "financial",
         "period": "2021—2023",
         "content": (
-            "2023 年主营业务收入同比增长 31.88%，其中跟踪式产品收入增长 94.62%，"
+            "主营业务收入由 2021 年的 16,088.21 万元增至 2023 年的 27,170.18 万元，"
             "收入结构变化发生在整体增长之中。"
         ),
-        "quote": (
-            "如上表所示，2023年，公司主营业务收入同比增长31.88%，主要系跟踪式"
-            "3D视觉数字化产品销售收入同比增长94.62%"
-        ),
+        "quote": "合计27,170.18100.00%20,602.47100.00%16,088.21100.00%",
     },
     # ---------------- 盈利质量（上交所 2025 年半年度报告） ----------------
     #: ⚠️ 半年报第 8 页是「主要会计数据」表格，PDF 文本层是「科目 → 本期 → 上年
@@ -179,7 +176,19 @@ _FACTS: dict[str, dict[str, Any]] = {
             "现金增加所致；"
         ),
     },
-    # ---------------- 主要风险（上交所半年报第 43 页） ----------------
+    # ---------------- 主要风险（上交所半年报第 2 / 43 页） ----------------
+    "EV-RISK-000": {
+        "source": HALF_YEAR.key,
+        "document_id": _HALF_YEAR_DOC,
+        "page": 2,
+        "category": "business",
+        "period": "2025 年上半年",
+        "content": "报告期内不存在对公司生产经营构成实质性影响的重大风险。",
+        "quote": (
+            "报告期内，不存在对公司生产经营构成实质性影响的重大风险。"
+            "公司已于本报告中详细描述了存在的相关风险"
+        ),
+    },
     "EV-RISK-001": {
         "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
@@ -344,6 +353,11 @@ _RISK_RESPONSE: dict[str, Any] = {
     ),
     "claims": [
         {
+            "id": "CL-RISK-000",
+            "text": "报告期内，公司不存在对生产经营构成实质性影响的重大风险。",
+            "evidence_ids": ["EV-RISK-000"],
+        },
+        {
             "id": "CL-RISK-001",
             "text": "低毛利率产品占比上升可能拖累整体毛利率。",
             "evidence_ids": ["EV-RISK-001"],
@@ -369,12 +383,12 @@ _RISK_RESPONSE: dict[str, Any] = {
                 "公司当前未披露已发生的重大经营风险，但技术差异化、产品毛利结构和"
                 "下游景气度是需要继续验证的变量。"
             ),
-            "evidence_ids": ["EV-RISK-001", "EV-RISK-002", "EV-RISK-003"],
+            "evidence_ids": ["EV-RISK-000", "EV-RISK-001", "EV-RISK-002", "EV-RISK-003"],
         }
     ],
     # 需求明确：风险问题**无图表**
     "charts": [],
-    "evidence_ids": ["EV-RISK-001", "EV-RISK-002", "EV-RISK-003"],
+    "evidence_ids": ["EV-RISK-000", "EV-RISK-001", "EV-RISK-002", "EV-RISK-003"],
 }
 
 #: 意图 → 预置回答
@@ -435,7 +449,9 @@ def _evidence_item(fact_key: str, *, stock_code: str) -> dict[str, Any] | None:
         logger.error("证据 %s 的来源 %r 未登记，剔除该证据", fact_key, fact.get("source"))
         return None
 
-    url = source.url_for_page(int(fact["page"]))
+    # API 只返回裸 PDF URL；`source_page` 独立传输，由前端统一追加 `#page=N`。
+    # 如果前后端都追加 fragment，会形成 `#page=N#page=N` 并导致 PDF 跳页失效。
+    url = source.url.split("#", 1)[0]
     if not verified_sources.is_official_high_confidence(source.url):
         logger.error(
             "来源 %s 不是官方高可靠度地址（%s），剔除证据 %s",

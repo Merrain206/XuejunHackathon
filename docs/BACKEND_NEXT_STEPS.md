@@ -1,5 +1,7 @@
 # 后端同学下一步任务
 
+> 状态：首轮后端任务已完成；本文为历史任务书，当前实现与运行方式以 `docs/HANDOFF.md` 和 `xray-backend/README.md` 为准。
+
 > 项目：Ask the Company 48 小时 Hackathon Demo  
 > 当前 Demo 公司：思看科技（688583）  
 > 最高原则：`No Evidence, No Claim`  
@@ -98,7 +100,7 @@ Hackathon 阶段先实现三个确定性意图处理器，不引入 LangGraph、
 你的收入结构发生了什么变化？
 ```
 
-数据范围：招股书 PDF 查看器第 323 页。
+数据范围：上交所招股说明书（注册稿）PDF 查看器第 321、322、324 页。
 
 输出应覆盖：
 
@@ -206,7 +208,7 @@ Hackathon 阶段先实现三个确定性意图处理器，不引入 LangGraph、
       "content": "...",
       "document_id": "DOC-001",
       "document_title": "...",
-      "source_page": 323,
+      "source_page": 322,
       "source_quote": "...",
       "source_url": "https://..."
     }

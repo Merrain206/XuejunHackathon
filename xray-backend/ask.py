@@ -339,24 +339,9 @@ def _build_charts(
 
 
 def suggest_questions(analysis: dict[str, Any] | None) -> list[str]:
-    """建议问题：优先与命中的风险主题相关，再补足到 5 条。"""
-    found = {
-        _signal_type_of(f) for f in ((analysis or {}).get("findings") or [])
-    }
-    mapping = {
-        "S1": "该公司的利润与现金流是否匹配？",
-        "S2": "该公司的应收账款增长是否异常？",
-        "S3": "该公司的社保参保人数变化如何？",
-        "S4": "该公司有哪些司法与合规风险？",
-    }
-    ordered = [mapping[t] for t in ("S1", "S2", "S3", "S4") if t in found]
-    ordered += [q for q in settings.DEFAULT_QUESTIONS if q not in ordered]
-
-    seen: list[str] = []
-    for question in ordered:
-        if question not in seen:
-            seen.append(question)
-    return seen[:5] or list(settings.DEFAULT_QUESTIONS)
+    """始终返回前端已准备好的三问和一条证据不足问题。"""
+    del analysis  # 保留调用签名；推荐问题不再随分析结果漂移。
+    return list(settings.DEFAULT_QUESTIONS)
 
 
 def build_answer_payload(

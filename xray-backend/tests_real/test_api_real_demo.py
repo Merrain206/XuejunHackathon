@@ -224,25 +224,27 @@ def test_acceptance_8c_demo_pages_are_the_verified_ones(real_db: None):
     口径（BACKEND_INTEGRATION_TASKS.md「P0-2」+ 本轮逐页核验）：
       * 收入结构 → 上交所招股说明书（注册稿）第 321 / 322 / 324 页；
       * 盈利质量 → 上交所 2025 年半年度报告第 8 / 8 / 9 页；
-      * 主要风险 → 上交所 2025 年半年度报告第 43 页。
+      * 主要风险 → 上交所 2025 年半年度报告第 2 / 43 页。
 
     ⚠️ 招股书三条**不是**同一页：
         - 321 页：主营业务收入合计 + 同比变动表（31.88% / 94.62%）；
         - 322 页：便携式 3D 扫描仪那段（78.19% → 57.87%）；
         - 324 页：跟踪式 3D 视觉数字化产品那段（11.77% → 26.58%）。
       第 323 页只讲彩色扫描仪与五大系列，**没有**跟踪式收入数据，
-      所以跟踪式那条不能标成 323（前端 mock-data.ts 里的 323 需同步修正）。
+      所以前后端均必须把跟踪式证据固定在第 324 页。
     """
     payload = demo_handlers.build_demo_response(DEMO_CODE, Q_STRUCTURE)
     assert payload is not None
     pages = {e["id"]: e["source_page"] for e in payload["evidence"]}
     assert pages == {"EV-STR-001": 322, "EV-STR-002": 324, "EV-STR-003": 321}, pages
+    totals_quote = next(e for e in payload["evidence"] if e["id"] == "EV-STR-003")["source_quote"]
+    assert "16,088.21" in totals_quote and "27,170.18" in totals_quote
 
     prof = demo_handlers.build_demo_response(DEMO_CODE, Q_PROFITABILITY)
     assert {e["source_page"] for e in prof["evidence"]} == {8, 9}
 
     risk = demo_handlers.build_demo_response(DEMO_CODE, Q_RISK)
-    assert {e["source_page"] for e in risk["evidence"]} == {43}
+    assert {e["source_page"] for e in risk["evidence"]} == {2, 43}
 
 
 def test_acceptance_8d_prospectus_quotes_verified_against_the_pdf(real_db: None):
@@ -395,10 +397,8 @@ def test_evidence_urls_are_official_high_confidence(client: TestClient):
             assert base.endswith(".pdf") or base.endswith(".PDF"), f"{ev['id']} 不是 PDF 地址：{url}"
             assert "cninfo" not in base, f"{ev['id']} 不得给巨潮链接：{url}"
 
-            # 页码锚点必须与 source_page 一致（点开就能翻到那一页）
-            assert url.endswith(f"#page={ev['source_page']}"), (
-                f"{ev['id']} 的 URL 锚点与 source_page 不一致：{url}"
-            )
+            # API 只返回裸 PDF URL；页码由前端根据 source_page 统一追加。
+            assert "#" not in url, f"{ev['id']} 的 source_url 不应包含 fragment：{url}"
 
 
 def test_demo_sources_are_the_two_verified_sse_documents(client: TestClient):
