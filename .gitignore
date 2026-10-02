@@ -39,6 +39,8 @@ venv/
 .pytest-run/
 .pytest-data/
 .pytest-tmp*/
+# pytest 在无法写 .pytest_cache 时会创建的空目录（受限环境下沙箱所致）
+pytest-cache-files-*/
 
 # ---- 数据源（体积大、由外部提供，不入版本库）----
 # 注意：xray-backend/data/ 由 xray-backend/.gitignore 覆盖；
