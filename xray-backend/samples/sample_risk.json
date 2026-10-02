@@ -1,0 +1,82 @@
+{
+  "answer": "根据目前掌握的信息，公司没有披露已经发生、足以对生产经营构成实质影响的重大风险。更值得持续关注的是技术差异化能否维持，以及产品结构和下游需求变化是否压低毛利率或收入。公司明确提示：低毛利率产品占比上升会影响整体毛利率；技术优势减弱会影响售价和市场份额；航空航天、汽车制造等下游需求收缩可能拖累收入。 以上均为公司披露的风险提示，不代表相关风险已经发生。",
+  "claims": [
+    {
+      "id": "CL-RISK-001",
+      "text": "低毛利率产品占比上升可能拖累整体毛利率。",
+      "evidence_ids": [
+        "EV-RISK-001"
+      ]
+    },
+    {
+      "id": "CL-RISK-002",
+      "text": "技术优势减弱可能影响售价和市场占有率。",
+      "evidence_ids": [
+        "EV-RISK-002"
+      ]
+    },
+    {
+      "id": "CL-RISK-003",
+      "text": "重要下游行业需求下降可能导致公司收入下降。",
+      "evidence_ids": [
+        "EV-RISK-003"
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "SIG-RISK-001",
+      "type": "attention",
+      "title": "增长依赖持续技术领先与下游需求",
+      "severity": "attention",
+      "description": "公司当前未披露已发生的重大经营风险，但技术差异化、产品毛利结构和下游景气度是需要继续验证的变量。",
+      "evidence_ids": [
+        "EV-RISK-001",
+        "EV-RISK-002",
+        "EV-RISK-003"
+      ]
+    }
+  ],
+  "charts": [],
+  "evidence": [
+    {
+      "id": "EV-RISK-001",
+      "category": "business",
+      "period": "2025 年上半年",
+      "content": "产品结构变化可能对销售毛利率产生不利影响。",
+      "document_id": "15",
+      "document_title": "2025年半年度报告.PDF",
+      "source_page": 43,
+      "source_quote": "如果公司未来的产品销售结构中，毛利率较低的产品的销售占比明显上升，则公司销售毛利率将受到不利影响。",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2025-08-28/1224594211.PDF"
+    },
+    {
+      "id": "EV-RISK-002",
+      "category": "business",
+      "period": "2025 年上半年",
+      "content": "技术优势减弱可能影响产品售价和市场占有率。",
+      "document_id": "15",
+      "document_title": "2025年半年度报告.PDF",
+      "source_page": 43,
+      "source_quote": "如果公司未来产品技术优势减弱或消除，与竞争对手的优势不明显，则公司产品的销售价格和市场占有率将受到不利影响。",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2025-08-28/1224594211.PDF"
+    },
+    {
+      "id": "EV-RISK-003",
+      "category": "business",
+      "period": "2025 年上半年",
+      "content": "下游重要应用领域需求萎缩可能导致公司收入下降。",
+      "document_id": "15",
+      "document_title": "2025年半年度报告.PDF",
+      "source_page": 43,
+      "source_quote": "如果包括航空航天、汽车制造、工程机械、交通运输在内下游重要应用领域市场需求萎缩，则可能导致公司收入下降，甚至面临业绩大幅下滑的风险。",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2025-08-28/1224594211.PDF"
+    }
+  ],
+  "suggested_questions": [
+    "你的收入结构发生了什么变化？",
+    "你最近真的赚钱吗？",
+    "目前最值得关注的风险是什么？",
+    "你的员工喜欢吃水果吗？"
+  ]
+}

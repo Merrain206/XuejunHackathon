@@ -1,0 +1,68 @@
+# ============================================================================
+#  X-Ray 夜间采集日志 · logrotate 配置
+#
+#  安装：
+#     sudo cp deploy/logrotate.xray /etc/logrotate.d/xray
+#     sudo chown root:root /etc/logrotate.d/xray && sudo chmod 644 /etc/logrotate.d/xray
+#
+#  ⚠️ 为什么日志文件是「按日命名」（night-batch-YYYY-MM-DD.log）而不是
+#     单文件 night_batch.log：
+#     应用侧的 logging_config.py 用的是 RotatingFileHandler（按大小轮转）。
+#     如果 cron 把 stdout 重定向到一个固定文件名、再由 logrotate 按大小切，
+#     两套轮转机制会互相干扰（logrotate 改名后进程仍持有旧 fd，日志会"消失"）。
+#     改成「一天一个文件」后职责清晰：
+#       - 我们不靠 logrotate 做切割（所以用不到 copytruncate，也不丢日志）；
+#       - logrotate 只负责**按天数清理**（maxage），这正是需求里的「只保留 7 天」。
+#
+#  如果你确实想用单文件 logs/night_batch.log + 按大小轮转，
+#  见文件末尾「方案 B」的注释。
+# ============================================================================
+
+/var/log/xray/night-batch-*.log
+/opt/xray/logs/night-batch-*.log
+{
+    # 通配符匹配的目录必须存在，否则 logrotate 会报错跳过整段
+    su root root
+
+    # 每天巡检一次（真正的清理由 maxage 决定）
+    daily
+
+    # ★ 只保留最近 7 天 —— 这就是需求里的保留策略
+    maxage 7
+
+    # 满足以下任一条件就执行本段（这里仅为触发一次清理动作）
+    size 1k
+
+    # 不压缩：日志按天分文件，压缩收益有限，且便于直接 grep
+    nocompress
+
+    # 不切割、不轮转改名：文件的创建与命名由 night_batch.sh 负责。
+    # 因此这里既不用 copytruncate，也不用 create —— 只用 maxage 清理。
+    missingok
+    notifempty
+
+    # 保留一份最近的状态文件，便于排查「为什么没清」
+    # sudo logrotate -d /etc/logrotate.d/xray   # -d = dry run，强烈建议先跑
+}
+
+# ============================================================================
+#  方案 B：单文件 logs/night_batch.log（固定文件名）
+#
+#  需要同时改两处，否则会丢日志：
+#    1) cron 里改为： 30 2 * * * <PROJECT_ROOT>/scripts/night_batch.sh
+#       并让 night_batch.sh 写固定文件（把 LOG_FILE=$(date +%F) 那行改成固定名）
+#    2) logrotate 用下面这段（注意 copytruncate，因为进程持有 fd）：
+#
+# /opt/xray/logs/night_batch.log {
+#     daily
+#     rotate 7          # 保留 7 份 = 最近 7 天
+#     maxage 7
+#     size 1M
+#     missingok
+#     notifempty
+#     compress
+#     delaycompress
+#     copytruncate      # ★ 关键：先复制再清空，进程无需重开文件
+#     create 0640 xray xray
+# }
+# ============================================================================

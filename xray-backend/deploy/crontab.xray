@@ -1,0 +1,41 @@
+# ============================================================================
+#  X-Ray 夜间数据采集 · crontab 配置
+#
+#  安装方式（二选一）：
+#    A) 自动安装（推荐，幂等）：
+#         sudo bash deploy/setup_cron.sh
+#    B) 手工安装：
+#         crontab -e          # 编辑当前用户
+#         sudo crontab -e     # 或 root（注意 root 下路径与权限）
+#
+#  ⚠️ 三点必读：
+#    1. cron 使用**系统时区**。应用内部 APScheduler 用的是 Asia/Shanghai
+#       （见 tasks/scheduler.py）。若服务器时区不是 CST，请用
+#       `timedatectl` 确认，或把下面的 30 2 换算成本地时间。
+#       也可在文件顶部加一行： CRON_TZ=Asia/Shanghai
+#    2. 若已启用应用内置调度器（SCHEDULER_ENABLED=true），cron 与它会**重复采集**。
+#       二选一：用 cron 就把 .env 里设成 SCHEDULER_ENABLED=false。
+#    3. <PROJECT_ROOT> 请替换为 xray-backend 的绝对路径（setup_cron.sh 会自动替换）。
+# ============================================================================
+
+# 显式指定时区，避免服务器为 UTC 时在错误的时间点执行
+CRON_TZ=Asia/Shanghai
+
+# 日志保留天数（night_batch.sh 读取；与 logrotate 的 maxage 保持一致）
+LOG_RETAIN_DAYS=7
+
+# PATH 兜底：部分精简镜像的 cron 连 /usr/local/bin 都没有
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# ---------------------------------------------------------------------------
+# 每天凌晨 02:30 执行夜间数据采集
+#   分 时 日 月 周   命令
+#   30 2  *  *  *   /path/to/xray-backend/scripts/night_batch.sh
+#
+# 说明：
+#   * 日志与追加写入由 night_batch.sh 内部完成（logs/night-batch-YYYY-MM-DD.log），
+#     这里**不需要**再写 >> 重定向，否则会重复记一份。
+#   * 唯一例外：脚本自身启动失败（比如路径写错）时没有任何输出，
+#     所以再兜一层 `|| echo`，保证 crontab 邮件/系统日志里能看出问题。
+# ---------------------------------------------------------------------------
+30 2 * * * <PROJECT_ROOT>/scripts/night_batch.sh || echo "[$(date '+\%Y-\%m-\%d \%H:\%M:\%S')] night_batch.sh 启动失败（退出码 $?）" >> <PROJECT_ROOT>/logs/night-batch-cron-error.log 2>&1
