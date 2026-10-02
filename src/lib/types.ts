@@ -36,6 +36,7 @@ export type ChartSpec = {
 };
 
 export type AskResponse = {
+  sourceMode: "api" | "mock" | "fallback";
   answer: string;
   claims: Claim[];
   signals: Signal[];
