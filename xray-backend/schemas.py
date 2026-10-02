@@ -62,6 +62,17 @@ ChartKind = Literal["line"]
 #: 证据类别 —— 前端校验器只接受这三个值
 EvidenceCategory = Literal["financial", "business", "company"]
 
+#: 证据核验状态（**可选字段**，前端不校验；缺省时前端按"未标注"处理）。
+#:
+#:   * `verified` —— 已人工核验（思看科技现有 Demo 证据 + 库里 review_status=verified
+#                   且本次原文页码复核通过的行）；
+#:   * `auto`     —— 本次请求已完成机械核验（页码、原文逐字、链接都对得上）；
+#:   * `pending`  —— 未通过核验。**不返回**：不通过的证据根本不会进响应，
+#:                   宁可证据不足，也不给一条无法回溯的出处。
+#:
+#: 设为可选是刻意的：现有前端与已发布样例都没有这个字段，加必填会直接破坏兼容。
+VerificationStatus = Literal["verified", "auto", "pending"]
+
 
 def to_signal_type(rule_id: str) -> str:
     """内部规则编号（S1-S4）→ 前端 signal type。"""
@@ -78,10 +89,17 @@ def to_evidence_category(hint: str | None) -> str:
 
     前端 isEvidence() 只认 financial / business / company，
     给别的值会导致**整包响应**被判定非法 → 静默降级 mock。
+
+    ⚠️ 新库里 `evidence.category` 出现了第四个取值 `risk`（手工核验的风险因素证据，
+       如 688583 的 `risk_product_mix`）。它必须映射到 **business** ——
+       前端契约只认三个值，而任务书明确要求"不得修改前端"。
+       风险因素属于公告主体内容，归到 business 语义上也站得住。
     """
     text = (hint or "").strip().lower()
     if text in ("financial", "business", "company"):
         return text
+    if text == "risk":
+        return "business"
     if any(k in text for k in ("财务", "会计", "利润", "现金", "营收", "资产", "financial")):
         return "financial"
     if any(k in text for k in ("工商", "基础", "company", "注册", "股东")):
@@ -239,6 +257,10 @@ class Evidence(_StrictModel):
     source_url: Annotated[str, Field(min_length=1, max_length=1024)]
     #: 风险维度（前端可直接画维度图；可选，不参与前端校验）
     risk_dimension: RiskDimension | None = None
+    #: 核验状态（**可选**，见 VerificationStatus 的说明）。
+    #: 默认 None 而不是 "auto"：老样例与三条稳定 Demo 的语义是"未标注"，
+    #: 硬塞一个默认值会让「人工核验」与「自动核验」在数据上再也分不开。
+    verification_status: VerificationStatus | None = None
 
     @field_validator("source_url")
     @classmethod
@@ -496,6 +518,7 @@ __all__ = [
     "SignalListResponse",
     "SignalSeverity",
     "SignalType",
+    "VerificationStatus",
     "to_evidence_category",
     "to_severity",
     "to_signal_type",

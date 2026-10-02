@@ -1,0 +1,112 @@
+{
+  "answer": "是的，思看科技在 2025 年上半年仍然盈利：归母净利润为 5,400.77 万元，同比增长 2.06%。但盈利质量有两个值得注意的变化：营收增长 17.70%，明显快于净利润；扣非归母净利润下降 2.93%，经营现金流净额下降 32.59%。因此，更准确的结论是「仍在赚钱，但利润增速和现金回收弱于收入增长」。",
+  "claims": [
+    {
+      "id": "CL-PRO-001",
+      "text": "2025 年上半年营业收入同比增长 17.70%，归母净利润同比增长 2.06%。",
+      "evidence_ids": [
+        "EV-PRO-001"
+      ]
+    },
+    {
+      "id": "CL-PRO-002",
+      "text": "扣非归母净利润同比下降 2.93%。",
+      "evidence_ids": [
+        "EV-PRO-002"
+      ]
+    },
+    {
+      "id": "CL-PRO-003",
+      "text": "经营活动现金流净额同比下降 32.59%。",
+      "evidence_ids": [
+        "EV-PRO-003"
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "SIG-PRO-001",
+      "type": "divergence",
+      "title": "收入增长，但利润和现金流增长未同步",
+      "severity": "attention",
+      "description": "营收保持两位数增长，但净利润仅小幅增长，扣非利润与经营现金流下降，需继续观察投入转化和现金回收。",
+      "evidence_ids": [
+        "EV-PRO-001",
+        "EV-PRO-002",
+        "EV-PRO-003"
+      ]
+    }
+  ],
+  "charts": [
+    {
+      "id": "CHART-PRO-001",
+      "type": "line",
+      "title": "2025年上半年关键指标同比变化",
+      "subtitle": "收入增长与扣非利润、经营现金流出现分化",
+      "unit": "%",
+      "periods": [
+        "营业收入",
+        "归母净利润",
+        "扣非净利润",
+        "经营现金流"
+      ],
+      "series": [
+        {
+          "name": "同比变化",
+          "values": [
+            17.7,
+            2.06,
+            -2.93,
+            -32.59
+          ]
+        }
+      ],
+      "evidence_ids": [
+        "EV-PRO-001",
+        "EV-PRO-002",
+        "EV-PRO-003"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "EV-PRO-001",
+      "category": "financial",
+      "period": "2025 年上半年",
+      "content": "主要会计数据：营业收入 176,848,509.44 元（同比 +17.70%），归属于上市公司股东的净利润 54,007,712.64 元（同比 +2.06%）。",
+      "document_id": "15",
+      "document_title": "思看科技 2025 年半年度报告",
+      "source_page": 8,
+      "source_quote": "主要会计数据（本报告期 / 上年同期 / 同比增减）：\n营业收入：176,848,509.44 元 / 150,248,052.96 元 / 增长 17.70%；\n利润总额：58,529,309.18 元 / 59,496,310.95 元 / 下降 1.63%；\n归属于上市公司股东的净利润：54,007,712.64 元 / 52,918,429.73 元 / 增长 2.06%。",
+      "source_url": "https://static.sse.com.cn/disclosure/listedinfo/announcement/c/new/2025-08-28/688583_20250828_9F77.pdf"
+    },
+    {
+      "id": "EV-PRO-002",
+      "category": "financial",
+      "period": "2025 年上半年",
+      "content": "扣非归母净利润同比下降 2.93%，利润增速明显低于收入增速。",
+      "document_id": "15",
+      "document_title": "思看科技 2025 年半年度报告",
+      "source_page": 8,
+      "source_quote": "主要会计数据（本报告期 / 上年同期 / 同比增减）：\n归属于上市公司股东的扣除非经常性损益的净利润：47,074,322.51 元 / 48,493,603.14 元 / 下降 2.93%。",
+      "source_url": "https://static.sse.com.cn/disclosure/listedinfo/announcement/c/new/2025-08-28/688583_20250828_9F77.pdf"
+    },
+    {
+      "id": "EV-PRO-003",
+      "category": "financial",
+      "period": "2025 年上半年",
+      "content": "经营活动现金流净额同比下降 32.59%；报告解释为产品迭代加快、备货增加导致购买材料支付的现金增加。",
+      "document_id": "15",
+      "document_title": "思看科技 2025 年半年度报告",
+      "source_page": 9,
+      "source_quote": "报告期内公司经营活动产生的现金流量净额为3,115.91万元，较上年同期下降32.59%，主要系随着公司产品迭代速度加快，备货增加导致购买材料支付的现金增加所致；",
+      "source_url": "https://static.sse.com.cn/disclosure/listedinfo/announcement/c/new/2025-08-28/688583_20250828_9F77.pdf"
+    }
+  ],
+  "suggested_questions": [
+    "你的收入结构发生了什么变化？",
+    "你最近真的赚钱吗？",
+    "目前最值得关注的风险是什么？",
+    "你的员工喜欢吃水果吗？"
+  ]
+}

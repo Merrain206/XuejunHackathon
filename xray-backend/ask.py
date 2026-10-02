@@ -42,8 +42,9 @@ from db import (
     get_company_summary,
     search_announcements,
 )
+import dynamic_qa
 from demo_handlers import build_demo_response, build_insufficient_response
-from response_validator import assert_valid
+from response_validator import INSUFFICIENT_ANSWER, assert_valid, verify_evidence_against_source
 from schemas import (
     AdminRefreshResponse,
     AskRequest,
@@ -349,10 +350,15 @@ def build_answer_payload(
 ) -> tuple[dict[str, Any], str]:
     """组装响应体；返回 (payload, 来源标记)。
 
-    回答优先级（BACKEND_NEXT_STEPS.md 规定）：
-      1. **三条稳定 Demo 问题** → 确定性处理器（demo_handlers），不依赖 LLM 与缓存，
-         毫秒级返回，保证演示一定有内容；
-      2. 其余问题 → **固定兜底文案**，「不让模型补充事实」。
+    决策顺序（TONIGHT_BACKEND_TASKS.md 第 1 节，**顺序不可调换**）：
+
+      1. **思看科技三条稳定 Demo 问题** → 确定性处理器（demo_handlers），
+         不依赖 LLM 与缓存，毫秒级返回，保证演示一定有内容；
+      2. **覆盖面之外 / 明确证据不足的问题** → 固定兜底，**不调用模型**
+         （如「你的员工喜欢吃水果吗？」）；
+      3. **其他公司或其他金融问题** → 动态 Evidence-first 问答
+         （先检索候选证据、再由模型组织、最后机械校验）；
+      4. 上面任一环节失败 → 固定兜底（HTTP 仍为 200）。
 
     ⚠️ 曾经这里还有一条「读该公司已生成的风险分析缓存」的分支。按新契约必须去掉：
        未知问题一律返回固定兜底，否则同一个问题会因为"那天有没有跑过批处理"而
@@ -366,25 +372,62 @@ def build_answer_payload(
     # ---- 1) 三条稳定问题：确定性回答 ----
     demo = build_demo_response(code, question)
     if demo is not None:
-        return _finalize(demo, "demo-handler"), "demo-handler"
+        return _finalize(demo, "demo-handler", stock_code=code), "demo-handler"
 
-    # ---- 2) 其余问题：固定兜底（HTTP 仍为 200）----
-    return _finalize(build_insufficient_response(), "insufficient"), "insufficient"
+    # ---- 2)+3) 动态 Evidence-first 问答（覆盖面之外的问题在内部直接兜底）----
+    if settings.DYNAMIC_QA_ENABLED:
+        payload, source = dynamic_qa.build_dynamic_response(code, question)
+        if source == dynamic_qa.SOURCE_DYNAMIC:
+            finalized = _finalize(payload, source, verify_source=True, stock_code=code)
+            # 校验退化后来源标记必须跟着改，否则演示时会被误导成"动态回答成功"
+            if finalized.get("answer") == INSUFFICIENT_ANSWER:
+                return finalized, "insufficient"
+            return finalized, source
+        return _finalize(payload, source, stock_code=code), "insufficient"
+
+    # ---- 4) 动态链路关闭：固定兜底（HTTP 仍为 200）----
+    return _finalize(build_insufficient_response(), "insufficient", stock_code=code), "insufficient"
 
 
-def _finalize(payload: dict[str, Any], source: str) -> dict[str, Any]:
+def _finalize(
+    payload: dict[str, Any],
+    source: str,
+    *,
+    verify_source: bool = False,
+    stock_code: str = "",
+) -> dict[str, Any]:
     """统一出口：跑契约校验，失败则退化为兜底回答。
 
     为什么失败要退化而不是抛 5xx：前端对 5xx 也会降级到 mock，但那样会丢掉
     「后端其实答得出来」的信息；退化到固定兜底至少语义正确、且不会白屏。
     校验问题会完整记进日志，便于排查。
+
+    :param verify_source: True 时额外把每条证据**回到数据库原文**核验
+        （`verify_evidence_against_source`）。只对**动态回答**开启：
+        思看科技三条稳定 Demo 引用的是上交所注册稿页码，而库里存的是巨潮上市稿
+        （两个版本、页码无固定偏移），用库去核它只会得出"引文核不到"的假失败。
+        注册稿的核验走 `demo_handlers.verify_facts_against_pdf`，直接对 PDF 本体做。
     """
     try:
-        return assert_valid(payload)
+        validated = assert_valid(payload)
     except (ValueError, TypeError) as exc:
         logger.error("响应未通过 No Evidence, No Claim 校验（source=%s），退化为兜底回答：%s",
                      source, exc)
         return build_insufficient_response()
+
+    if verify_source and validated.get("evidence"):
+        check = verify_evidence_against_source(validated, stock_code=stock_code)
+        for warning in check.warnings:
+            logger.warning("证据核验警告（%s）：%s", source, warning)
+        if not check.ok:
+            logger.error(
+                "证据未通过数据库原文核验（source=%s），退化为兜底回答：%s",
+                source,
+                "；".join(check.errors),
+            )
+            return build_insufficient_response()
+
+    return validated
 
 
 # ---------------------------------------------------------------------------

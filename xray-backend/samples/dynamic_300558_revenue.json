@@ -1,0 +1,83 @@
+{
+  "answer": "根据公开披露数据，最近报告期该项指标为 1,975,927,792.57，与对比期相比存在变化，具体见所引用证据。以上均为公司公开披露信息，不构成投资建议。",
+  "claims": [
+    {
+      "id": "CL-DYN-001",
+      "text": "2026 半年该项指标为 1,975,927,792.57。",
+      "evidence_ids": [
+        "EV-001"
+      ]
+    },
+    {
+      "id": "CL-DYN-002",
+      "text": "2025 年度该项指标为 3,609,338,576.55。",
+      "evidence_ids": [
+        "EV-002"
+      ]
+    },
+    {
+      "id": "CL-DYN-003",
+      "text": "2025 年度该项指标为 917,554,506.92。",
+      "evidence_ids": [
+        "EV-003"
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "SIG-DYN-001",
+      "type": "trend",
+      "title": "指标存在变化",
+      "severity": "attention",
+      "description": "最近报告期该项指标为 1,975,927,792.57，与对比期不同。",
+      "evidence_ids": [
+        "EV-001"
+      ]
+    }
+  ],
+  "charts": [],
+  "evidence": [
+    {
+      "id": "EV-001",
+      "category": "financial",
+      "period": "2026 半年",
+      "content": "营业收入（2026 半年）：1,975,927,792.57",
+      "document_id": "1332",
+      "document_title": "20260821_2026年半年度报告摘要.pdf",
+      "source_page": 1,
+      "source_quote": "营业收入（元） 1,975,927,792.57 1,731,412,742.27 14.12%",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2026-08-21/1225487672.PDF",
+      "verification_status": "auto"
+    },
+    {
+      "id": "EV-002",
+      "category": "financial",
+      "period": "2025 年度",
+      "content": "营业收入（2025 年度）：3,609,338,576.55",
+      "document_id": "1272",
+      "document_title": "20260423_2025年年度报告摘要.pdf",
+      "source_page": 17,
+      "source_quote": "营业收入 3,609,338,576.55 2,891,950,112.03 24.81%",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2026-04-23/1225152841.PDF",
+      "verification_status": "auto"
+    },
+    {
+      "id": "EV-003",
+      "category": "financial",
+      "period": "2025 年度",
+      "content": "营业收入（2025 年度）：917,554,506.92",
+      "document_id": "1272",
+      "document_title": "20260423_2025年年度报告摘要.pdf",
+      "source_page": 18,
+      "source_quote": "营业收入 917,554,506.92 813,858,235.35 985,929,981.64",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2026-04-23/1225152841.PDF",
+      "verification_status": "auto"
+    }
+  ],
+  "suggested_questions": [
+    "最近营业收入和归母净利润表现如何？",
+    "经营现金流表现如何？",
+    "近几个报告期的盈利趋势是什么？",
+    "你的员工喜欢吃水果吗？"
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "answer": "根据公开披露数据，最近报告期该项指标为 982,280,538.55，与对比期相比存在变化，具体见所引用证据。以上均为公司公开披露信息，不构成投资建议。",
+  "claims": [
+    {
+      "id": "CL-DYN-001",
+      "text": "2026 半年该项指标为 982,280,538.55。",
+      "evidence_ids": [
+        "EV-001"
+      ]
+    },
+    {
+      "id": "CL-DYN-002",
+      "text": "2025 年度该项指标为 1,066,754,032.01。",
+      "evidence_ids": [
+        "EV-002"
+      ]
+    },
+    {
+      "id": "CL-DYN-003",
+      "text": "2025 半年该项指标为 901,068,685.34。",
+      "evidence_ids": [
+        "EV-003"
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "SIG-DYN-001",
+      "type": "trend",
+      "title": "指标存在变化",
+      "severity": "attention",
+      "description": "最近报告期该项指标为 982,280,538.55，与对比期不同。",
+      "evidence_ids": [
+        "EV-001"
+      ]
+    }
+  ],
+  "charts": [],
+  "evidence": [
+    {
+      "id": "EV-001",
+      "category": "financial",
+      "period": "2026 半年",
+      "content": "经营活动产生的现\n金流量净额（2026 半年）：-982,280,538.55",
+      "document_id": "1890",
+      "document_title": "20260826_恒生电子股份有限公司2026年半年度报告摘要.pdf",
+      "source_page": 3,
+      "source_quote": "-982,280,538.55 -901,068,685.34",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2026-08-26/1225505997.PDF",
+      "verification_status": "auto"
+    },
+    {
+      "id": "EV-002",
+      "category": "financial",
+      "period": "2025 年度",
+      "content": "经营活动产生\n的现金流量净\n额（2025 年度）：1,066,754,032.01",
+      "document_id": "1806",
+      "document_title": "20260328_恒生电子股份有限公司2025年年度报告摘要.pdf",
+      "source_page": 5,
+      "source_quote": "1,066,754,032.01 867,929,234.22 22.91",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2026-03-28/1225047550.PDF",
+      "verification_status": "auto"
+    },
+    {
+      "id": "EV-003",
+      "category": "financial",
+      "period": "2025 半年",
+      "content": "经营活动产生的现\n金流量净额（2025 半年）：-901,068,685.34",
+      "document_id": "1699",
+      "document_title": "20250823_恒生电子股份有限公司2025年半年度报告摘要.pdf",
+      "source_page": 3,
+      "source_quote": "-901,068,685.34 -1,176,260,793.60",
+      "source_url": "http://static.cninfo.com.cn/finalpage/2025-08-23/1224561752.PDF",
+      "verification_status": "auto"
+    }
+  ],
+  "suggested_questions": [
+    "最近营业收入和归母净利润表现如何？",
+    "经营现金流表现如何？",
+    "近几个报告期的盈利趋势是什么？",
+    "你的员工喜欢吃水果吗？"
+  ]
+}

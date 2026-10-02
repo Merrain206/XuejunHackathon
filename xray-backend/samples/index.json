@@ -4,6 +4,7 @@
   "samples": [
     {
       "file": "sample_structure.json",
+      "company": "688583",
       "question": "你的收入结构发生了什么变化？",
       "label": "收入结构",
       "source": "demo-handler",
@@ -14,6 +15,7 @@
     },
     {
       "file": "sample_profitability.json",
+      "company": "688583",
       "question": "你最近真的赚钱吗？",
       "label": "盈利质量",
       "source": "demo-handler",
@@ -24,6 +26,7 @@
     },
     {
       "file": "sample_risk.json",
+      "company": "688583",
       "question": "目前最值得关注的风险是什么？",
       "label": "主要风险",
       "source": "demo-handler",
@@ -34,6 +37,7 @@
     },
     {
       "file": "sample_insufficient.json",
+      "company": "688583",
       "question": "你的员工喜欢吃水果吗？",
       "label": "证据不足（固定兜底）",
       "source": "insufficient",
@@ -42,5 +46,140 @@
       "charts": 0,
       "evidence": 0
     }
-  ]
+  ],
+  "dynamic_samples": [
+    {
+      "file": "dynamic_688583_revenue.json",
+      "company": "688583",
+      "question": "最近营业收入和归母净利润表现如何？",
+      "label": "动态：营收与归母净利润",
+      "source": "demo-handler",
+      "claims": 3,
+      "signals": 1,
+      "charts": 1,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_688583_cashflow.json",
+      "company": "688583",
+      "question": "经营现金流表现如何？",
+      "label": "动态：经营现金流",
+      "source": "demo-handler",
+      "claims": 3,
+      "signals": 1,
+      "charts": 1,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_688583_fruit.json",
+      "company": "688583",
+      "question": "你的员工喜欢吃水果吗？",
+      "label": "动态：证据不足（固定兜底）",
+      "source": "insufficient",
+      "claims": 0,
+      "signals": 0,
+      "charts": 0,
+      "evidence": 0
+    },
+    {
+      "file": "dynamic_600570_revenue.json",
+      "company": "600570",
+      "question": "最近营业收入和归母净利润表现如何？",
+      "label": "动态：营收与归母净利润",
+      "source": "dynamic-llm",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_600570_cashflow.json",
+      "company": "600570",
+      "question": "经营现金流表现如何？",
+      "label": "动态：经营现金流",
+      "source": "dynamic-llm",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_600570_fruit.json",
+      "company": "600570",
+      "question": "你的员工喜欢吃水果吗？",
+      "label": "动态：证据不足（固定兜底）",
+      "source": "insufficient",
+      "claims": 0,
+      "signals": 0,
+      "charts": 0,
+      "evidence": 0
+    },
+    {
+      "file": "dynamic_000066_revenue.json",
+      "company": "000066",
+      "question": "最近营业收入和归母净利润表现如何？",
+      "label": "动态：营收与归母净利润",
+      "source": "dynamic-llm",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_000066_cashflow.json",
+      "company": "000066",
+      "question": "经营现金流表现如何？",
+      "label": "动态：经营现金流",
+      "source": "dynamic-llm",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_000066_fruit.json",
+      "company": "000066",
+      "question": "你的员工喜欢吃水果吗？",
+      "label": "动态：证据不足（固定兜底）",
+      "source": "insufficient",
+      "claims": 0,
+      "signals": 0,
+      "charts": 0,
+      "evidence": 0
+    },
+    {
+      "file": "dynamic_300558_revenue.json",
+      "company": "300558",
+      "question": "最近营业收入和归母净利润表现如何？",
+      "label": "动态：营收与归母净利润",
+      "source": "dynamic-llm",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_300558_cashflow.json",
+      "company": "300558",
+      "question": "经营现金流表现如何？",
+      "label": "动态：经营现金流",
+      "source": "dynamic-llm",
+      "claims": 3,
+      "signals": 1,
+      "charts": 0,
+      "evidence": 3
+    },
+    {
+      "file": "dynamic_300558_fruit.json",
+      "company": "300558",
+      "question": "你的员工喜欢吃水果吗？",
+      "label": "动态：证据不足（固定兜底）",
+      "source": "insufficient",
+      "claims": 0,
+      "signals": 0,
+      "charts": 0,
+      "evidence": 0
+    }
+  ],
+  "dynamic_note": "dynamic_* 样例由确定性假 LLM 生成（内容可复现）；真实模型成功率与耗时见 xray-backend/README.md。"
 }
