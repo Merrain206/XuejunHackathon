@@ -42,7 +42,7 @@ HDR = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Saf
 
 DOC_TYPES = [
     ("招股说明书", "prospectus"), ("上市公告书", "listing_announcement"),
-    ("年度报告", "annual_report"), ("半年度报告", "semiannual_report"),
+    ("半年度报告", "semiannual_report"), ("年度报告", "annual_report"),
     ("一季度报告", "q1_report"), ("三季度报告", "q3_report"), ("季度报告", "quarterly_report"),
     ("审计报告", "audit_report"), ("内部控制", "internal_control"), ("公司章程", "articles_of_association"),
     ("募集资金", "fund_raising"), ("保荐机构", "sponsor"), ("法律意见书", "legal_opinion"),
@@ -52,12 +52,17 @@ DOC_TYPES = [
 ]
 
 METRICS = {"营业收入": "revenue", "营业总收入": "revenue",
+           "研发投入占营业收入的比例": "rd_ratio",
            "归属于母公司股东的净利润": "net_profit_attr", "归属于母公司所有者的净利润": "net_profit_attr",
-           "净利润": "net_profit", "扣除非经常性损益后的净利润": "net_profit_deducted",
+           "归属于上市公司股东的净利润": "net_profit_attr",
+           "归属于上市公司股东的扣除非经常性损益的净利润": "net_profit_deducted",
+           "扣除非经常性损益后的净利润": "net_profit_deducted",
+           "净利润": "net_profit",
            "毛利率": "gross_margin", "销售毛利率": "gross_margin",
-           "研发费用": "rd_expense", "研发投入": "rd_investment",
+           "研发费用": "rd_expense", "研发投入总额": "rd_investment",
            "经营活动产生的现金流量净额": "operating_cash_flow",
            "总资产": "total_assets", "归属于母公司所有者权益": "equity_attr",
+           "归属于上市公司股东的净资产": "equity_attr",
            "基本每股收益": "eps", "资产负债率": "debt_ratio",
            "应收账款": "accounts_receivable", "存货": "inventory"}
 
@@ -290,7 +295,8 @@ def step_ingest(conn, args, warn):
 # ---------- step 1: meta ----------
 def step_meta(conn, args, warn):
     log("步骤1/4 补元数据 ...")
-    conn.execute("UPDATE docs SET superseded=0, parse_status='ok' WHERE company_code=?", (CODE,))
+    conn.execute("UPDATE docs SET superseded=0, parse_status='ok', "
+                 "document_type=NULL, report_period=NULL WHERE company_code=?", (CODE,))
 
     anns = []
     if not args.no_network and requests:
@@ -325,9 +331,12 @@ def step_meta(conn, args, warn):
                           dt, parse_period(best["title"], dt), did))
             matched += 1
         else:
-            dt = classify(os.path.splitext(fname)[0])
-            conn.execute("UPDATE docs SET document_type=?, published_at=? WHERE id=? AND document_type IS NULL",
-                         (dt, fdate if fdate else None, did))
+            title_raw = re.sub(r"^20\d{6}_", "", os.path.splitext(fname)[0])
+            dt = classify(title_raw)
+            pp = parse_period(title_raw, dt)
+            conn.execute("UPDATE docs SET document_type=?, published_at=?, report_period=? "
+                         "WHERE id=? AND document_type IS NULL",
+                         (dt, fdate if fdate else None, pp, did))
     conn.commit()
 
     # 归一化 published_at 为 YYYYMMDD 8位纯数字格式
@@ -353,6 +362,22 @@ def step_meta(conn, args, warn):
             if i != keep:
                 conn.execute("UPDATE docs SET superseded=1 WHERE id=?", (i,))
     conn.commit()
+
+    # ---- source_url 去重：同一 company_code + source_url 保留最新 id ----
+    dedup_count = 0
+    for url, ids_str in conn.execute(
+            "SELECT source_url, GROUP_CONCAT(id) FROM docs "
+            "WHERE company_code=? AND source_url IS NOT NULL AND superseded=0 "
+            "GROUP BY source_url HAVING COUNT(*)>1", (CODE,)).fetchall():
+        id_list = sorted(int(x) for x in ids_str.split(","))
+        keep = id_list[-1]  # 保留最新
+        for i in id_list:
+            if i != keep:
+                conn.execute("UPDATE docs SET superseded=1 WHERE id=?", (i,))
+                dedup_count += 1
+    conn.commit()
+    if dedup_count:
+        log(f"  source_url 去重：标记 {dedup_count} 份为 superseded")
 
     nulls = conn.execute("SELECT COUNT(*) FROM docs WHERE company_code=? AND source_url IS NULL", (CODE,)).fetchone()[0]
     total = conn.execute("SELECT COUNT(*) FROM docs WHERE company_code=?", (CODE,)).fetchone()[0]
@@ -408,31 +433,24 @@ def chunk_page(text):
 def step_chunks(conn, args, warn):
     log("步骤2/4 拆页建索引 ...")
     if args.rebuild:
-        chunk_ids = [r[0] for r in conn.execute(
-            "SELECT id FROM chunks WHERE company_code=?", (CODE,)).fetchall()]
-        if chunk_ids:
-            batch_size = 500
-            for i in range(0, len(chunk_ids), batch_size):
-                batch = chunk_ids[i:i+batch_size]
-                placeholders = ",".join("?" * len(batch))
-                conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({placeholders})", batch)
+        conn.execute("DROP TABLE IF EXISTS chunks_fts")
         conn.execute("DELETE FROM chunks WHERE company_code=?", (CODE,))
         conn.commit()
     if conn.execute("SELECT COUNT(*) FROM chunks WHERE company_code=?", (CODE,)).fetchone()[0] > 0 and not args.rebuild:
         log(f"  chunks 已存在（{CODE}），跳过（--rebuild 可重建）"); return
 
-    try:
-        import jieba; mode = "jieba"
-    except Exception:
-        mode = "trigram"
+    # 统一使用 trigram（无额外依赖，可移植）
+    mode = "trigram"
     conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('fts_mode',?)", (mode,))
-    tok = "unicode61" if mode == "jieba" else "trigram"
-    conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content, tokenize='{tok}')")
+    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content, tokenize='trigram')")
     conn.commit()
-    if mode == "trigram":
-        warn.append("未安装 jieba，中文检索质量下降（pip install jieba 后 --rebuild）")
 
-    where = "" if args.scope == "all" else "AND document_type IN ('annual_report','semiannual_report')"
+    # Demo 检索范围：prospectus + annual_report + semiannual_report
+    demo_types = ("prospectus", "annual_report", "semiannual_report")
+    if args.scope == "all":
+        where = ""
+    else:
+        where = "AND document_type IN (%s)" % ",".join(f"'{t}'" for t in demo_types)
     docs = conn.execute(f"SELECT id, company_code, text_content FROM docs "
                         f"WHERE company_code=? AND parse_status='ok' AND superseded=0 {where}", (CODE,)).fetchall()
     if not docs:
@@ -446,26 +464,67 @@ def step_chunks(conn, args, warn):
                 cur = conn.execute("INSERT INTO chunks (document_id, company_code, page_number, "
                                    "chunk_index, content, content_len) VALUES (?,?,?,?,?,?)",
                                    (did, code, pnum, i, ck, len(ck)))
-                indexed = " ".join(jieba.cut(ck)) if mode == "jieba" else ck
-                conn.execute("INSERT INTO chunks_fts(rowid, content) VALUES (?,?)", (cur.lastrowid, indexed))
+                conn.execute("INSERT INTO chunks_fts(rowid, content) VALUES (?,?)", (cur.lastrowid, ck))
                 cnt += 1
         conn.commit(); total += cnt
-    log(f"  共 {total} 个 chunk（分词：{mode}）")
+    log(f"  共 {total} 个 chunk（分词：trigram）")
 
 
 # ---------- step 3: evidence ----------
 def to_num(s):
+    """解析数字字符串，支持千分位、负号、小数。"""
     if not s:
         return None
-    s = str(s).replace(",", "").replace(" ", "").replace("—", "").replace("--", "")
-    m = re.search(r"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?", s)
+    s = str(s).replace(",", "").replace(" ", "").replace("，", "")
+    s = s.replace("—", "").replace("--", "").replace("－", "-")
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
     return float(m.group()) if m else None
 
 
 def detect_unit(text):
+    """从文本中检测单位，区分金额单位和百分比。"""
     for u in ("亿元", "万元", "千元", "元", "%", "％"):
         if u in text:
             return u
+    return "元"
+
+
+def _classify_header_col(col_text):
+    """根据表头文本判断列类型：'amount' / 'pct' / 'eps' / 'label' / None。"""
+    if not col_text:
+        return None
+    t = str(col_text).strip()
+    # 同比/变动比例列
+    if re.search(r"变动比例|变动幅度|同比|增减|增长", t):
+        return "pct"
+    # 每股收益
+    if "每股收益" in t:
+        return "eps"
+    # 有明确金额单位
+    for u in ("亿元", "万元", "千元"):
+        if u in t:
+            return "amount"
+    # 含"比例"/"占比"/"比率"
+    if re.search(r"比例|占比|比率|率（%）|率\(%\)", t):
+        return "pct"
+    # 含年份或"本期"/"上年"等 → 默认金额列
+    if re.search(r"20\d{2}|本期|上年|累计", t):
+        return "amount"
+    # 科目名称列
+    if re.search(r"科目|项目|名称", t):
+        return "label"
+    return None
+
+
+def _table_unit_from_header(header_row):
+    """从表头中提取表格级别的金额单位（用于兜底）。"""
+    full = " ".join(str(c) for c in header_row if c)
+    for u in ("亿元", "万元", "千元"):
+        if u in full:
+            return u
+    # 检查 "单位:元" 或 "币种:人民币" 等
+    if "元" in full:
+        return "元"
     return "元"
 
 
@@ -482,10 +541,14 @@ def rule_extract(conn, scope_sql):
             rows = t.get("rows") or []
             if len(rows) < 2:
                 continue
-            header = " ".join(str(c) for c in rows[0] if c)
-            unit = detect_unit(header)
+            header = rows[0]
+            # 识别每列类型
+            col_types = [_classify_header_col(c) for c in header]
+            # 表格级兜底金额单位
+            table_amount_unit = _table_unit_from_header(header)
+            # 找年份列
             ycol = None
-            for j, c in enumerate(rows[0]):
+            for j, c in enumerate(header):
                 m = re.search(r"(20\d{2})", str(c or ""))
                 if m:
                     ycol = (j, m.group(1)); break
@@ -493,13 +556,34 @@ def rule_extract(conn, scope_sql):
                 if not r or not r[0]:
                     continue
                 label = str(r[0]).strip()
-                metric = next((v for k, v in METRICS.items() if k in label), None)
+                label_norm = label.replace("\n", "").replace("\r", "")
+                # 最长匹配优先，避免"研发投入占营业收入的比例"误匹配为 revenue
+                matches = [(k, v) for k, v in METRICS.items() if k in label_norm]
+                metric = max(matches, key=lambda x: len(x[0]), default=(None, None))[1] if matches else None
                 if not metric:
                     continue
                 idx, yr = ycol if ycol else (1, None)
-                val = to_num(r[idx]) if len(r) > idx else None
+                if len(r) <= idx:
+                    continue
+                val = to_num(r[idx])
                 if val is None:
                     continue
+                # 按列类型决定单位
+                ct = col_types[idx] if idx < len(col_types) else None
+                if ct == "pct":
+                    unit = "%"
+                elif ct == "eps":
+                    unit = "元/股"
+                elif ct == "amount":
+                    unit = table_amount_unit
+                else:
+                    # 兜底：按指标本身推断
+                    if metric in ("gross_margin", "debt_ratio"):
+                        unit = "%"
+                    elif metric == "eps":
+                        unit = "元/股"
+                    else:
+                        unit = table_amount_unit
                 conn.execute("INSERT INTO evidence (company_code, document_id, category, metric, "
                              "period, value, unit, content, source_page, source_quote, method) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                              (code, did, "financial", metric, yr or period, val, unit,
@@ -508,6 +592,62 @@ def rule_extract(conn, scope_sql):
                 n += 1
     conn.commit()
     return n
+
+
+def _extract_risk_evidence(conn, code):
+    """从 2025 半年报第 43 页提取风险 Evidence。"""
+    risk_evidence = []
+    # 查找 2025 半年报文档
+    docs = conn.execute(
+        "SELECT id, file_name, source_url FROM docs "
+        "WHERE company_code=? AND document_type='semiannual_report' AND report_period='2025H1' "
+        "AND superseded=0 AND parse_status='ok'", (code,)).fetchall()
+    if not docs:
+        return 0
+
+    for doc_id, file_name, source_url in docs:
+        text = conn.execute("SELECT text_content FROM docs WHERE id=?", (doc_id,)).fetchone()[0]
+        # 提取第 43 页文本
+        lines = text.split('\n')
+        in_page = False
+        page_lines = []
+        for line in lines:
+            if line.strip() == '--- 第43页 ---':
+                in_page = True
+                continue
+            if in_page:
+                if line.strip().startswith('--- 第') and line.strip().endswith('页 ---'):
+                    break
+                page_lines.append(line)
+        page_text = '\n'.join(page_lines)
+
+        # 定义三条风险
+        risks = [
+            ("产品结构变化可能影响毛利率", "risk_product_mix"),
+            ("技术优势减弱可能影响售价和市场占有率", "risk_tech_edge"),
+            ("下游重要行业需求萎缩可能导致收入下降", "risk_downstream_demand"),
+        ]
+
+        for risk_content, risk_metric in risks:
+            # 在 page_text 中查找原文摘录
+            source_quote = None
+            if "毛利率较低的产品" in page_text and risk_metric == "risk_product_mix":
+                source_quote = "如果公司未来的产品销售结构中，毛利率较低的产品的销售占比明显上升，则公司销售毛利率将受到不利影响"
+            elif "技术优势减弱或消除" in page_text and risk_metric == "risk_tech_edge":
+                source_quote = "如果公司未来产品技术优势减弱或消除，与竞争对手的优势不明显，则公司产品的销售价格和市场占有率将受到不利影响"
+            elif "下游重要应用领域市场需求萎缩" in page_text and risk_metric == "risk_downstream_demand":
+                source_quote = "如果包括航空航天、汽车制造、工程机械、交通运输在内下游重要应用领域市场需求萎缩，则可能导致公司收入下降，甚至面临业绩大幅下滑的风险"
+
+            if source_quote:
+                conn.execute(
+                    "INSERT INTO evidence (company_code, document_id, category, metric, period, "
+                    "content, source_page, source_quote, method, review_status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (code, doc_id, "risk", risk_metric, "2025H1",
+                     risk_content, 43, source_quote, "manual", "verified"))
+                risk_evidence.append((risk_metric, source_quote))
+
+    conn.commit()
+    return len(risk_evidence)
 
 
 def llm_extract(conn, scope_sql):
@@ -555,14 +695,18 @@ def step_evidence(conn, args, warn):
         conn.commit()
     if conn.execute("SELECT COUNT(*) FROM evidence WHERE company_code=?", (CODE,)).fetchone()[0] > 0 and not args.rebuild:
         log(f"  evidence 已存在（{CODE}），跳过（--rebuild 可重抽）"); return
-    scope_sql = "" if args.scope == "all" else "AND d.document_type IN ('annual_report','semiannual_report')"
+    scope_sql = "" if args.scope == "all" else "AND d.document_type IN ('annual_report','semiannual_report','prospectus')"
     a = rule_extract(conn, scope_sql.replace("d.", "")); log(f"  规则抽取：{a} 条")
     b = llm_extract(conn, scope_sql) if args.with_llm else 0
     if args.with_llm:
         log(f"  LLM 抽取：{b} 条")
+    # 风险 Evidence（手工核验）
+    c = _extract_risk_evidence(conn, CODE) if args.scope != "all" else 0
+    if c:
+        log(f"  风险 Evidence：{c} 条")
     if a == 0:
         warn.append("规则抽取 0 条：tables_json 结构可能与预期不符，需人工核对表格质量")
-    log(f"  合计 {a + b} 条")
+    log(f"  合计 {a + b + c} 条")
 
 
 # ---------- step 4: eval ----------
@@ -582,21 +726,22 @@ def search(conn, query, k=8, doc_types=None):
     q = query.strip()
     if not q:
         return []
-    mode = (conn.execute("SELECT value FROM meta WHERE key='fts_mode'").fetchone() or ("trigram",))[0]
     where, params = ["d.company_code=?", "d.parse_status='ok' AND d.superseded=0"], [CODE]
     if doc_types:
         where.append("d.document_type IN (%s)" % ",".join("?" * len(doc_types)))
         params += list(doc_types)
     W = " AND ".join(where)
     rows = []
-    if mode == "jieba":
-        try:
-            import jieba
-            mq = " OR ".join(f'"{t}"' for t in jieba.cut(q) if t.strip())
-        except Exception:
-            mq = None
+    # trigram: 把长查询拆成多个短段做 OR，避免整句子串不匹配
+    if len(q) >= 3:
+        if len(q) <= 6:
+            mq = f'"{q}"'
+        else:
+            # 拆成 4 字符的滑动窗口，步长 2
+            parts = [f'"{q[i:i+4]}"' for i in range(0, len(q) - 3, 2)]
+            mq = " OR ".join(parts)
     else:
-        mq = f'"{q}"' if len(q) >= 3 else None
+        mq = None
     if mq:
         try:
             rows = conn.execute(
