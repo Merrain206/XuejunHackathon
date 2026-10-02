@@ -28,8 +28,6 @@ xray.db-shm
 logs/
 *.log
 cache/
-exports/
-*.pptx
 
 # ---- 测试临时目录 ----
 # .pytest-run 是 pytest 的 basetemp，.pytest-data 放测试库与 scratch（见 tests/conftest.py）

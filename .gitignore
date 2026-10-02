@@ -1,18 +1,9 @@
-# ============================================================================
-#  仓库根 .gitignore
-#  合并自两套历史：
-#    - 本地工作区规则（ai-web-ppt / xray-backend / 测试临时目录）
-#    - XuejunHackathon main 的 Next.js 规则（前端现在位于仓库根目录）
-#  子项目各自也有 .gitignore（git 会叠加生效）：
-#    ai-web-ppt/.gitignore        （若存在）
-#    xray-backend/.gitignore
-# ============================================================================
+# Ask the Company 仓库忽略规则
 
 # ---- Node 依赖与缓存 ----
 node_modules/
 /node_modules
 .npm-cache/
-runtime/
 /.pnp
 .pnp.*
 .yarn/*
@@ -29,12 +20,11 @@ build/
 /.next/
 /out/
 /coverage
-web/dist/
 *.tsbuildinfo
 next-env.d.ts
 
 # ---- 机密与本地配置 ----
-# 各项目有自己的 .env（ai-web-ppt/.env、xray-backend/.env、根目录 .env.local）
+# 前端根目录与后端子目录各自使用本地 .env
 # 全部排除，但保留 .env.example 模板
 .env
 .env*
@@ -46,17 +36,12 @@ next-env.d.ts
 .ssh-key/
 
 # ---- 运行期产出 ----
-outputs/
-uploads/
 logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-.exports/
-*.pptx
-
 # ---- 附件副本（Harness 落盘的只读副本，非源码）----
 .attachments-tmp/
 
