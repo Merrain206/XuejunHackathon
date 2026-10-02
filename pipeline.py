@@ -21,8 +21,8 @@ except Exception:
     requests = None
 
 # ============ 配置 ============
-DB_PATH   = r"D:\hackathon\cninfo.db"
-DATA_ROOT = r"D:\hackathon\cninfo_data"     # 每家一个子文件夹：cninfo_data\{code}\*.pdf
+DB_PATH   = os.getenv("DATABASE_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cninfo.db"))
+DATA_ROOT = os.getenv("DATA_ROOT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cninfo_data"))
 DEFAULT_CODE = "688583"
 CODE = DEFAULT_CODE                          # 运行时由 --code 覆盖
 EVAL_CSV = REPORT_MD = REVIEW_CSV = None     # 运行时按 code 拼
@@ -147,21 +147,29 @@ def ensure_schema(conn):
     conn.executescript("""
     CREATE INDEX IF NOT EXISTS idx_docs_company ON docs(company_code);
     CREATE INDEX IF NOT EXISTS idx_docs_type ON docs(document_type);
+    CREATE INDEX IF NOT EXISTS idx_docs_period ON docs(company_code, document_type, report_period);
     CREATE TABLE IF NOT EXISTS chunks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, document_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
         company_code TEXT NOT NULL, page_number INTEGER, chunk_index INTEGER,
-        content TEXT NOT NULL, content_len INTEGER);
+        content TEXT NOT NULL, content_len INTEGER,
+        UNIQUE(document_id, page_number, chunk_index));
     CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
+    CREATE INDEX IF NOT EXISTS idx_chunks_company ON chunks(company_code);
     CREATE TABLE IF NOT EXISTS evidence (
         id INTEGER PRIMARY KEY AUTOINCREMENT, company_code TEXT NOT NULL,
-        document_id INTEGER NOT NULL, category TEXT, metric TEXT, period TEXT,
+        document_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+        category TEXT, metric TEXT, period TEXT,
         value REAL, unit TEXT, content TEXT, source_page INTEGER, source_quote TEXT,
         method TEXT, review_status TEXT DEFAULT 'auto',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS idx_ev_doc ON evidence(document_id);
     CREATE INDEX IF NOT EXISTS idx_ev_metric ON evidence(metric);
+    CREATE INDEX IF NOT EXISTS idx_ev_company_metric ON evidence(company_code, metric);
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     """)
+    # 设置 schema 版本
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '1.0')")
     conn.commit()
 
 
@@ -859,7 +867,9 @@ def main():
     shutil.copy2(DB_PATH, bak)
     log(f"公司={CODE} 已备份 -> {bak}")
 
-    conn = sqlite3.connect(DB_PATH); ensure_schema(conn)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    ensure_schema(conn)
     warn = []
     for fn in (step_ingest, step_meta, step_chunks, step_evidence):
         try:
