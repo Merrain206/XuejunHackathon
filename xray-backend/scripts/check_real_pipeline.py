@@ -111,7 +111,15 @@ undated_all = [i for i in db.get_announcements(code, days=None, body_chars=0) if
 undated_win = [i for i in win365 if not i["announce_date"]]
 check("无日期公告在窗口过滤后仍全部保留",
       len(undated_win) == len(undated_all), f"{len(undated_win)}/{len(undated_all)}")
-check("无日期公告数量可观（真实库约 60 条）", len(undated_all) >= 30, str(len(undated_all)))
+# 日期解析覆盖率：紧凑 YYYYMMDD 修好后，绝大多数公告都应解析出真实日期。
+# 注意不要断言「无日期数量 ≥ N」——那等于把解析缺陷当成期望值。
+dated_all = [i for i in db.get_announcements(code, days=None, body_chars=0) if i["announce_date"]]
+coverage = len(dated_all) / total if total else 0
+check("公告日期解析覆盖率 ≥ 95%", coverage >= 0.95,
+      f"{len(dated_all)}/{total} = {coverage:.1%}")
+check("解析出的日期已精确到日（不是一律 YYYY-01-01）",
+      len({i["announce_date"] for i in dated_all}) > 100,
+      f"不同日期数 {len({i['announce_date'] for i in dated_all})}")
 
 # ---- LLM 桩：返回固定 JSON ----
 FAKE = {
@@ -152,7 +160,7 @@ prompt = CAPTURED.get("prompt", "")
 check("prompt 含真实公司代码", code in prompt)
 check("prompt 含真实公告正文片段", "募集资金" in prompt or "诉讼" in prompt,
       f"prompt 长度 {len(prompt)}")
-check("prompt 含公告 id 与文件名", "id=" in prompt and ".PDF" in prompt)
+check("prompt 含公告 id 与文件名", "id=" in prompt and ".pdf" in prompt.lower())
 
 # 当日缓存生效
 calls = {"n": 0}

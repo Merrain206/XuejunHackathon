@@ -127,6 +127,47 @@ def test_parse_announce_date_unit():
     assert p("2024年13月.pdf") == "2024-01-01", "非法月份应退回按年解析"
 
 
+def test_parse_announce_date_compact_yyyymmdd():
+    """紧凑 YYYYMMDD 前缀（真实库 cninfo.db 文件名的主格式）。
+
+    回归保护：这里三个断言对应一个真实 bug —— 曾漏掉紧凑写法，
+    导致文件名里的 YYYYMMDD 被忽略、退化成从标题里的「2026年」按年解析，
+    全库 1905 条公告的日期一律变成 YYYY-01-01，排序与时间窗口全部失真。
+    """
+    p = db.parse_announce_date
+    assert p("20260429_2026年一季度报告.pdf") == "2026-04-29"
+    assert p("20260829_2026年半年度报告.pdf") == "2026-08-29"
+    assert p("20230104_关于获得临床试验批准通知书的公告.pdf") == "2023-01-04"
+    # 紧凑写法必须优先于标题里的年份
+    assert (
+        p("20260829_关于2026年1-6月募集资金存放、管理与实际使用情况的专项报告.pdf")
+        == "2026-08-29"
+    ), "紧凑前缀应胜过标题中的年份"
+
+
+def test_parse_announce_date_not_fooled_by_month_range():
+    """「1-6月」「1-9月」是月份区间，不是「1月6日」。
+
+    回归保护：真实库里这类半年/季度表述极常见，曾被误解析成 1 月 6 日之类的假日期。
+    """
+    p = db.parse_announce_date
+    # 区间不应被读成「某月某日」
+    assert p("2026年1-6月经营情况公告.pdf") == "2026-01-01"
+    assert p("关于2026年1-9月经营情况的公告.pdf") == "2026-01-01"
+    # 但真正带「日」的写法仍要正常解析
+    assert p("2023年年度报告（2026年9月12日）.pdf") == "2026-09-12"
+
+
+def test_parse_announce_date_numeric_needs_separators():
+    """纯数字日期必须有分隔符；无分隔的 8 位数按 YYYYMMDD 处理。"""
+    p = db.parse_announce_date
+    assert p("2024-04-19公告.pdf") == "2024-04-19"
+    assert p("2024/04/19公告.pdf") == "2024-04-19"
+    assert p("20240419公告.pdf") == "2024-04-19"
+    # 非法紧凑日期不能被当成合法日期，也不能误取内部片段
+    assert p("20260230坏日期.pdf") in (None, "2026-01-01")
+
+
 def test_normalize_cn_digits():
     assert db.normalize_cn_digits("二〇二五年") == "2025年"
     assert db.normalize_cn_digits("２０２５") == "2025"

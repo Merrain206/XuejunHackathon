@@ -275,7 +275,17 @@ ANNOUNCE_DATE_UNKNOWN = "unknown"
 _CN_DIGITS = str.maketrans("〇零一二三四五六七八九０１２３４５６７８９", "001234567890123456789")
 
 #: 完整日期：2024-04-19 / 2024年4月19日 / 2024/04/19
-_DATE_FULL = re.compile(r"(20\d{2})\s*[-年/.]\s*(\d{1,2})\s*[-月/.]\s*(\d{1,2})")
+#: ⚠️ 中文写法必须带「日/号」收尾，否则 `2026年1-6月`（月份区间）会被当成
+#: 「2026 年 1 月 6 日」，真实库里这类「1-6月」「1-9月」标题极常见。
+_DATE_FULL = re.compile(
+    r"(?<!\d)(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]"
+    r"|(?<!\d)(20\d{2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?!\d)"
+)
+#: 紧凑日期 YYYYMMDD —— 真实库里文件名的主格式（如 20260829_2026年半年度报告.pdf）。
+#: ⚠️ 必须排在「只有年月」之前：否则 `20260429_2026年一季度报告.pdf` 会被
+#: `_DATE_YM` 抢到「2026年」而已，整库日期全部退化成 YYYY-01-01。
+#: 末尾 `(?!\s*[-~—]\s*\d)` 排除 `2026年1-6月` 这类区间里的年份数字。
+_DATE_YMD = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)(?!\s*[-~—]\s*\d)")
 #: 只有年月：2025年7月 / 2025-07
 _DATE_YM = re.compile(r"(20\d{2})\s*[-年/.]\s*(\d{1,2})\s*月?")
 #: 只有年份：2024年
@@ -301,14 +311,27 @@ def parse_announce_date(*candidates: str | None) -> str | None:
             continue
         text = normalize_cn_digits(str(raw))
 
-        match = _DATE_FULL.search(text)
+        # 紧凑 YYYYMMDD 优先：真实库文件名的主格式，且能排除「1-6月」区间的干扰
+        match = _DATE_YMD.search(text)
         if match:
             year, month, day = (int(g) for g in match.groups())
             if _MIN_YEAR <= year <= _MAX_YEAR and 1 <= month <= 12 and 1 <= day <= 31:
                 try:
                     return date(year, month, day).isoformat()
                 except ValueError:
-                    pass  # 2 月 30 日之类 → 继续往下试
+                    pass  # 20260230 之类 → 继续往下试
+
+        match = _DATE_FULL.search(text)
+        if match:
+            # 两个分支（中文带日/号、数字带分隔符）二选一，未命中的那组为 None
+            parts = [g for g in match.groups() if g is not None]
+            if len(parts) == 3:
+                year, month, day = (int(g) for g in parts)
+                if _MIN_YEAR <= year <= _MAX_YEAR and 1 <= month <= 12 and 1 <= day <= 31:
+                    try:
+                        return date(year, month, day).isoformat()
+                    except ValueError:
+                        pass  # 2 月 30 日之类 → 继续往下试
 
         match = _DATE_YM.search(text)
         if match:
