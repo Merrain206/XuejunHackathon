@@ -13,31 +13,57 @@
 
 ## ① Demo 三条命令
 
-```bash
-# 1) 起服务（三条稳定问题无需大模型，也无需先跑批处理）
-python main.py
+**环境**：Python 3.10+（本项目实测 3.14.3）。
 
-# 2) 提问
-curl -X POST http://localhost:8000/companies/688583/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question":"你最近真的赚钱吗？"}'
+```bash
+# 1) 装依赖 + 准备配置
+python -m pip install -r requirements.txt
+cp .env.example .env        # Windows: copy .env.example .env
+#   .env 里**唯一必需**的是数据库位置；留空即自动探测（见 ③）。
+#   DATABASE_PATH=
+#   DEEPSEEK_API_KEY=         ← 可选！三条稳定问题不需要大模型
+
+# 2) 起服务（三条稳定问题无需大模型，也无需先跑批处理）
+python main.py              # → http://127.0.0.1:8000
 
 # 3)（可选）跑一遍全量风险分析，产出缓存与报告
 python scripts/run_night_batch.py --demo
 ```
 
-安装依赖（首次）：
-
-```bash
-python -m pip install -r requirements.txt
-cp .env.example .env        # Windows: copy .env.example .env
-# 在 .env 里填 DEEPSEEK_API_KEY（可选）
-```
-
 > **不配 API key 也能完整演示三条稳定问题** —— 这正是做确定性处理器的理由。
 > 大模型只影响「非稳定问题 → 缓存风险结论」这条链路。
 
+### 四条演示问题（真实调用示例）
+
+```powershell
+$body = @{ question = "你的收入结构发生了什么变化？" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/companies/688583/ask" `
+  -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 8
+```
+
+```bash
+# 收入结构（带图表）
+curl -s -X POST http://127.0.0.1:8000/companies/688583/ask \
+  -H "Content-Type: application/json" -d '{"question":"你的收入结构发生了什么变化？"}'
+
+# 盈利质量（带图表）
+curl -s -X POST http://127.0.0.1:8000/companies/688583/ask \
+  -H "Content-Type: application/json" -d '{"question":"你最近真的赚钱吗？"}'
+
+# 主要风险（无图表）
+curl -s -X POST http://127.0.0.1:8000/companies/688583/ask \
+  -H "Content-Type: application/json" -d '{"question":"目前最值得关注的风险是什么？"}'
+
+# 证据不足（HTTP 200 + 固定兜底，四个数组全空）
+curl -s -X POST http://127.0.0.1:8000/companies/688583/ask \
+  -H "Content-Type: application/json" -d '{"question":"你的员工喜欢吃水果吗？"}'
+
+# 健康检查（含最终解析出的数据库路径，不含任何密钥）
+curl -s http://127.0.0.1:8000/health
+```
+
 四条演示问题的实测响应已固化在 `samples/`（见 ⑥ 响应样例）。
+`suggested_questions` **只返回这四条，且顺序固定**。
 
 ---
 
@@ -135,21 +161,43 @@ python scripts/check_frontend_contract.py
 
 ### `source_url` 与 `source_page` 怎么来的
 
-* **`source_url`**：优先取 `docs` 表的 URL 列（`source_url` / `url` / `doc_url` 任一，
-  存在即自动采用）；拿不到就**丢弃该条证据** —— 宁可少给一条，也不编一个点开就 404 的链接。
-  确定性处理器（三条 Demo）用的都是库里的**真实公告直链**。
-* **`source_page`**：必须是**被引用片段真正所在的页码**。
+三条 Demo 的出处**不取库里的链接**，而是取自 `verified_sources.py` 里两份**已逐页核验**的
+上交所原始 PDF（原因见下表）。LLM 分析链路仍走库里的 `docs.source_url`。
 
-> ⚠️ 这里曾经是错的：旧实现把该公告的 `page_count` 当引用页码，
-> 于是 520 页的招股书里每条引用都声称出自「第 520 页」——
-> 这正是 BACKEND_NEXT_STEPS.md 明令禁止的**伪造页码**。
+| 问题 | 权威来源（`source_url`） | `document_title` | PDF 查看器页码 |
+| --- | --- | --- | --- |
+| 收入结构 | 上交所《招股说明书（注册稿）》`001845_20240816_R2YE.pdf`（506 页） | 思看科技首次公开发行股票并在科创板上市招股说明书（注册稿） | **321 / 322 / 324** |
+| 盈利质量 | 上交所《2025 年半年度报告》`688583_20250828_9F77.pdf`（269 页） | 思看科技 2025 年半年度报告 | **8 / 9** |
+| 主要风险 | 同上 | 同上 | **43** |
+
+* **`source_url`**：必须是**可直接打开的 PDF 原始地址**，且满足前端的高可靠度规则
+  （`HTTPS` + `sse.com.cn` 或其子域名）。拿不到就**丢弃该条证据** ——
+  宁可少给一条，也不编一个点开就 404 的链接，更不拿公告列表页冒充原文。
+  地址里带 `#page=N` 锚点，点开即翻到引用页。
+* **`source_page`**：必须是**被引用片段真正所在的页码**，并在自检中回到原文逐字核验。
+
+> ⚠️ 两个真实存在过的错误，都已经被回归测试钉死：
 >
-> 现在分两条路：
-> 1. **确定性处理器**：每条引用的页码在 `demo_handlers._FACTS` 里显式声明，
->    并由 `verify_facts()` 回到 `chunks` 表逐条核验（页码对不对、原文在不在那一页）；
-> 2. **LLM 分析链路**：prompt 按「`[第 N 页]`」给出分页正文（来自 `chunks` 表），
->    要求模型回填 `source_page`；随后校验该页码落在公告页数范围内，
->    **拿不到可信页码就丢弃该条证据**（`ask.py` 的 `_build_evidence`）。
+> **1）伪造页码**：旧实现把公告的 `page_count` 当引用页码，于是 520 页的招股书里
+> 每条引用都声称出自「第 520 页」。现在分两条路：
+> 1. **确定性处理器**：页码在 `demo_handlers._FACTS` 里显式声明，由 `verify_facts()`
+>    （对库）与 `verify_facts_against_pdf()`（对 PDF 本体）核验；
+> 2. **LLM 分析链路**：prompt 按「`[第 N 页]`」给出分页正文，要求模型回填 `source_page`，
+>    越界即视为不可信并**丢弃该条证据**（`ask.py` 的 `_build_evidence`）。
+>
+> **2）张冠李戴（页码配错 PDF）**：`cninfo.db` 里的招股书是**巨潮上市稿（520 页）**，
+> 而前端已核验的权威地址是**上交所注册稿（506 页）**。两版**页数不同、页码偏移也不固定**
+> （便携式那段：上市稿 329 → 注册稿 322；跟踪式那段：上市稿 332 → 注册稿 324），
+> 所以**库无法为注册稿的页码作证**。因此：
+> * 对外 `source_url` / `document_title` / `source_page` / `source_quote` 一律指注册稿；
+> * 库只用来确认「这条引文在库内那份文档里确实存在且唯一」；
+> * 注册稿的页码由 `verify_facts_against_pdf()` 直接对 PDF 本体核验
+>   （需要 `pip install pypdf` + 下载注册稿，缺了会 skip 而不是假通过）。
+
+> ⚠️ **招股书三条证据不在同一页**，这不是笔误：321 页是主营业务收入合计与同比变动表，
+> 322 页是便携式扫描仪那段，324 页是跟踪式产品那段。
+> **第 323 页只讲彩色扫描仪与五大系列，没有跟踪式收入数据** ——
+> 前端 `mock-data.ts` 里把跟踪式标成 323 需要同步修正。
 
 ### 响应校验器（No Evidence, No Claim 的机器强制）
 
@@ -175,23 +223,27 @@ python scripts/check_frontend_contract.py
 
 `demo_handlers.py` 针对固定演示问题给出**确定性**答案：
 
-| 问题 | 证据来源 | 图表 |
-| --- | --- | --- |
-| 你的收入结构发生了什么变化？ | 招股书 `id=299` 第 **329** 页 | 有 |
-| 你最近真的赚钱吗？ | 2025 半年报 `id=15` 第 **8** 页 | 有 |
-| 目前最值得关注的风险是什么？ | 2025 半年报 `id=15` 第 **43** 页 | 无 |
-| （其它问题） | — | 无，返回固定兜底 |
+| 问题 | 证据来源（已核验的上交所 PDF） | PDF 查看器页码 | 图表 |
+| --- | --- | --- | --- |
+| 你的收入结构发生了什么变化？ | 招股说明书（注册稿） | 321 / 322 / 324 | 有 |
+| 你最近真的赚钱吗？ | 2025 年半年度报告 | 8 / 9 | 有 |
+| 目前最值得关注的风险是什么？ | 2025 年半年度报告 | 43 | 无 |
+| （其它问题） | — | — | 无，返回固定兜底 |
 
 > 意图判定顺序与前端 `mock-data.ts` 的 `selectResponse()` **完全一致**
 > （先「赚钱/盈利/利润/现金流」，再「风险」，最后「收入结构」），
 > 否则同一个问题在「后端作答」与「前端降级作答」两条路径下会得到不同答案。
+>
+> ⚠️ 注意：判定的单位是**意图**而不是"那三句话"。像「这家公司有什么风险？」
+> 含「风险」，会命中风险意图并正常作答 —— 这是期望行为。
+> 兜底只对**认不出意图**的问题生效（如「你的员工喜欢吃水果吗？」）。
 
 
 ---
 
 ## ③ 数据库
 
-唯一数据源：**`cninfo.db`**（当前实际路径 `xuejun-hackathon/data/cninfo.db`）。
+唯一数据源：**`cninfo.db`**（默认放在**仓库根目录**，见下面的路径解析）。
 
 | 表 | 内容 | 本后端怎么用 |
 | --- | --- | --- |
@@ -210,18 +262,23 @@ python scripts/check_frontend_contract.py
 
 ### 路径解析（自适应）
 
-`DB_PATH`（或规范名 `DATABASE_PATH`，后者优先）默认 `data/cninfo.db`（相对 `xray-backend/`）。
-**找不到时依次回退**：
+`DATABASE_PATH`（规范名，**优先级最高**）或旧名 `DB_PATH`；两者都留空时自动探测：
 
-1. `xray-backend/data/cninfo.db`
-2. `../data/cninfo.db`（库放仓库根）
-3. `../xuejun-hackathon/data/cninfo.db`（**当前实际位置**）
+1. `../cninfo.db` —— **仓库根目录（默认布局，不用挪库）** ← 推荐
+2. `xray-backend/data/cninfo.db`
+3. `../data/cninfo.db`
 
-`DB_PATH_STRICT=true` 可关闭回退（测试「库不存在」场景用）。
+`DB_PATH_STRICT=true` 可关闭自动探测（测试「库不存在」场景用）。
+**指向不存在的文件时不会静默创建空库**：`db.py` 抛 `DatabaseNotReadyError`，
+接口返回 503 + 明确路径，`/health` 里也能看到解析结果。
 
 ```bash
 python -c "import config; print(config.settings.db_file)"   # 看实际用的是哪个库
+curl -s http://127.0.0.1:8000/health | python -m json.tool   # db_path 在 capabilities.settings 里
 ```
+
+`.env.example` 只写通用示例（`DATABASE_PATH=` 留空即可），**不硬编码任何个人绝对路径**。
+数据库一律以 `mode=ro` 只读打开，请求期间不写库、不重建。
 
 ### ⚠️ 两个必须知道的数据事实
 
@@ -329,6 +386,7 @@ xray-backend/
 ├── main.py                  FastAPI 入口、lifespan、CORS、统一异常处理（无调度器）
 ├── ask.py                   5 条路由；answer 优先级：确定性处理器 → 固定兜底
 ├── demo_handlers.py         ★ 三条稳定 Demo 问题的确定性处理器 + 事实核验
+├── verified_sources.py      ★ 已核验的权威 PDF 目录（上交所注册稿 / 半年报）
 ├── response_validator.py    ★ No Evidence, No Claim 响应校验器
 ├── db.py                    ★ 唯一数据访问层（docs/chunks/evidence，只读 sqlite3）
 ├── analyzer.py              ★ 唯一 LLM 判断逻辑（prompt + 清洗 + 当日缓存）
@@ -356,7 +414,7 @@ xray-backend/
 ├── tests_real/              真实 cninfo.db —— 三条 Demo 问题的端到端验收
 │   ├── conftest.py          指向真实库（与 tests/ 环境刻意隔离）
 │   ├── pytest.ini           独立 basetemp，避免沙箱 ACL 冲突
-│   └── test_api_real_demo.py  10 条验收 + 校验器 + 意图判定
+│   └── test_api_real_demo.py  10 条验收 + 校验器 + 意图判定 + 来源/页码回归
 ├── deploy/crontab.xray      生产环境 cron 示例
 ├── _unused/                 旧链路归档（逐文件说明废弃原因见其 README）
 │   └── README.md
@@ -368,7 +426,7 @@ xray-backend/
 └── .gitignore
 ```
 
-> 数据库本身不在本目录（`*.db` 已 gitignore）：当前在 `../xuejun-hackathon/data/cninfo.db`。
+> 数据库本身不在本目录（`*.db` 已 gitignore）：默认放在**仓库根目录**。
 
 ---
 
@@ -380,9 +438,24 @@ xray-backend/
 ```bash
 python -m pip install -r requirements.txt
 
-python -m pytest tests        # 合成库：db / 契约 / 批处理 / analyzer 行为
-python -m pytest tests_real   # 真实库：三条 Demo 问题的端到端验收
+python -m pytest tests -q        # 合成库：db / 契约 / 批处理 / analyzer 行为
+python -m pytest tests_real -q   # 真实库：三条 Demo 问题的端到端验收
 ```
+
+`tests_real` 需要仓库根目录有 `cninfo.db`（或用 `XRAY_REAL_DB` / `DATABASE_PATH` 指定）；
+找不到会 **skip 整个目录**，而不是伪造一个库来自我盖章。
+
+**可选**：额外对**注册稿 PDF 本体**核验招股书的逐字原文与页码
+（库里的招股书是另一个版本，无法替注册稿的页码作证）：
+
+```bash
+python -m pip install pypdf
+# 下载 https://static.sse.com.cn/stock/disclosure/announcement/c/202408/001845_20240816_R2YE.pdf
+set XRAY_PROSPECTUS_PDF=D:\path\to\001845_20240816_R2YE.pdf   # PowerShell: $env:XRAY_PROSPECTUS_PDF=...
+python -m pytest tests_real -q -k pdf
+```
+
+没有 `pypdf` 或缺 PDF 时，这条用例会 skip 并提示原因（不会假通过）。
 
 重新生成前端联调用的响应样例：
 
@@ -429,7 +502,54 @@ python scripts/check_batch.py    # analyzer + 批处理
 
 ---
 
-## ⑧ 关于 `_unused/`
+## ⑧ 前后端联调信息（本轮交付）
+
+| 项 | 值 |
+| --- | --- |
+| 启动 | `python main.py`（默认 `127.0.0.1:8000`） |
+| Python | 3.10+（实测 3.14.3） |
+| 依赖 | `python -m pip install -r requirements.txt` |
+| `.env` 必需变量 | **无**。数据库留空即自动探测；`DEEPSEEK_API_KEY` 只影响非稳定问题 |
+| 前端只需设置 | `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000` |
+| 权威 PDF ① | 招股说明书（注册稿）`https://static.sse.com.cn/stock/disclosure/announcement/c/202408/001845_20240816_R2YE.pdf` —— 第 321 / 322 / 324 页 |
+| 权威 PDF ② | 2025 年半年度报告 `https://static.sse.com.cn/disclosure/listedinfo/announcement/c/new/2025-08-28/688583_20250828_9F77.pdf` —— 第 8 / 9 / 43 页 |
+
+`/health` 示例（节选）：
+
+```jsonc
+{
+  "status": "ok",
+  "database": true,
+  "companies": 4,
+  "llm_ready": false,
+  "capabilities": {
+    "settings": { "db_path": "C:\\...\\dsh\\cninfo.db" }   // 解析后的真实路径，不含密钥
+  }
+}
+```
+
+四条问题的调用示例见 ①。
+
+### 已知限制 / 未完成事项
+
+1. **前端 `mock-data.ts` 需同步两处**：跟踪式证据的页码应为 **324**（现为 323），
+   且其 `sourceQuote` 现为改写句（"由 1,893.69 万元增至 7,222.66 万元"），
+   后端用的是注册稿第 324 页的**逐字原文**（"…销售收入分别为1,893.69万元、
+   3,711.22万元和7,222.66万元，占主营业务收入的比例分别为11.77%、18.01%和26.58%。"）。
+   两条路径的 `answer` 已一致，但 `evidence[].sourceQuote` 文案暂未逐字对齐。
+2. **第 323 页无法支撑跟踪式引用**（该页只有彩色扫描仪与五大系列内容），
+   已按前端负责人决策改为 324；若前端坚持 323，需换一条落在 323 页的证据。
+3. **注册稿 PDF 不在版本库**（13 MB）。页码核验用例需要手工下载后才跑，
+   否则 skip；库那份是上市稿，**不能**替注册稿作证。
+4. **`cninfo.db` 不入库**（`*.db` 已 gitignore），需自行放置到仓库根目录。
+5. 六个月报页码虽与库完全一致，但 SSE 该 URL 对脚本化下载返回 JS 反爬页
+   （浏览器/正常客户端可打开）；核验时用的是与之同版的库内文档 + 人工确认。
+6. Nightly Pipeline / Snapshot / 维护模式 / 任意问题 LLM 分析均**未实现**，
+   属目标架构，不要当成已完成能力。
+
+---
+
+## ⑨ 关于 `_unused/`
 
 旧链路（ORM + 结构化财务字段 + 确定性规则引擎 + 外部渠道抓取 + 应用内调度）与本轮
 新链路的数据模型不兼容，已整体归档到 `_unused/`，**不再被任何代码引用**。

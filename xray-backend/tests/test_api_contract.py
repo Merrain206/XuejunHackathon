@@ -11,6 +11,7 @@ from tests.helpers import (
     EXPECTED_TOP_KEYS,
     FORBIDDEN_KEYS,
     MISSING_CODE,
+    UNMATCHED_QUESTION,
     assert_contract,
     post_ask,
 )
@@ -166,16 +167,18 @@ def test_low_or_unknown_risk_company_still_answers(analyzed):
 
 
 def test_ask_unknown_question_returns_fixed_fallback(client):
-    """非三条稳定问题一律固定兜底，**不读缓存、不让模型补充事实**。
+    """认不出意图的问题一律固定兜底，**不读缓存、不让模型补充事实**。
 
     ⚠️ 历史行为是"读缓存摘要 + 补一句最新公告"，该分支已按
        BACKEND_NEXT_STEPS.md 移除：否则同一个问题会因为"那天有没有跑过批处理"
        而得到不同答案，甚至把旧缓存里未核验的结论当成回答发出去。
+    ⚠️ 这里必须用**不命中任何稳定意图关键词**的问题：「风险 / 关注 / 注意」
+       会命中 risk 意图并被正常作答，那是期望行为，不是兜底。
     """
     from analyzer import clear_cache
 
     clear_cache(TARGET)
-    payload = post_ask(client, TARGET).json()
+    payload = post_ask(client, TARGET, question=UNMATCHED_QUESTION).json()
 
     from demo_handlers import INSUFFICIENT_ANSWER
 
@@ -186,18 +189,18 @@ def test_ask_unknown_question_returns_fixed_fallback(client):
 
 
 def test_normalizes_exchange_suffix(analyzed):
-    """用户可能传 688583.SH，应被归一成库里的 688583。
+    """用户可能传 688583.SH，应被归一成库里的 688583，并正常作答。
 
-    ⚠️ 测试库是 8 列合成库（没有 source_url / chunks），确定性处理器会正确地
-       拒绝作答（不伪造链接）→ 落到固定兜底。这里验证的是"没有 404、契约合法"。
-       真正命中处理器的断言在 tests_real/（对着真实库跑）。
+    ⚠️ 确定性处理器对三条稳定问题的**出处来自已核验来源目录**，与库里那份
+       文档是不是同一个版本无关（库里是巨潮上市稿，对外引用上交所注册稿），
+       所以合成库上也会正常返回 demo-handler。这里同时验证"没有 404、契约合法"。
     """
     response = analyzed.post(
         "/companies/688583.SH/ask",
         json={"question": "你的收入结构发生了什么变化？"},
     )
     assert response.status_code == 200, response.text
-    assert response.headers.get("X-XRay-Cache") in {"demo-handler", "insufficient"}
+    assert response.headers.get("X-XRay-Cache") == "demo-handler"
     assert_contract(response.json())
 
 
@@ -206,21 +209,25 @@ def test_normalizes_exchange_suffix(analyzed):
 # ---------------------------------------------------------------------------
 
 
-def test_ask_never_fabricates_when_real_url_missing(analyzed):
-    """库里没有真实 source_url 时，必须给出兜底而不是编造链接。
+def test_demo_sources_come_from_verified_catalog_not_the_db(analyzed):
+    """三条 Demo 的出处一律是**已核验的上交所 PDF**，与库里存的是哪一版无关。
 
-    测试库是 8 列合成库：docs 表没有 source_url 列，chunks 也不存在。
-    确定性处理器因此一条证据都建不起来 → 必须回退到固定兜底。
-    这是"不伪造链接/页码"这条红线的行为验证。
+    合成测试库的 docs 表连 `source_url` 列都没有（更别说 chunks），
+    但注册稿/半年报的 `source_url` 来自 `verified_sources.py`，
+    因此这里必须仍然给出上交所 HTTPS 地址，而不是巨潮列表页、
+    也不是"因为库不完整就给兜底"。
     """
-    from demo_handlers import INSUFFICIENT_ANSWER
+    from verified_sources import is_official_high_confidence
 
     response = post_ask(analyzed, TARGET, question="你最近真的赚钱吗？")
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["answer"] == INSUFFICIENT_ANSWER
-    assert response.headers.get("X-XRay-Cache") == "insufficient"
-    assert payload["evidence"] == [], "拿不到真实链接就不该有 evidence"
+
+    assert response.headers.get("X-XRay-Cache") == "demo-handler"
+    assert payload["evidence"], "确定性处理器应当给出已核验证据"
+    for ev in payload["evidence"]:
+        assert is_official_high_confidence(ev["source_url"]), ev["source_url"]
+        assert "cninfo" not in ev["source_url"], "不得给巨潮链接（前端只认上交所为高可靠度）"
     assert_contract(payload)
 
 

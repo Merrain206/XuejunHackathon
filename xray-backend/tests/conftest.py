@@ -75,6 +75,10 @@ TEST_DIR.mkdir(parents=True, exist_ok=True)
 DB_FILE = TEST_DIR / "cninfo.db"
 
 os.environ["DB_PATH"] = str(DB_FILE)
+# ⚠️ 必须同时写规范名 DATABASE_PATH：它在 config.Settings 里优先级高于 DB_PATH。
+#    若外面 shell 里恰好设了 DATABASE_PATH（联调时很常见），只设 DB_PATH 会被它盖住，
+#    整套测试就会跑去连真实库 —— 合成库断言全线失败，且看着像代码坏了。
+os.environ["DATABASE_PATH"] = str(DB_FILE)
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["LLM_ENABLED"] = "true"
 os.environ["LLM_FAKE"] = "true"          # 默认不联网

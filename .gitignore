@@ -60,6 +60,11 @@ yarn-error.log*
 # ---- 附件副本（Harness 落盘的只读副本，非源码）----
 .attachments-tmp/
 
+# ---- 核验用临时产物（体积大，按需下载/生成，不入库）----
+xray-backend/.cache-pdf/
+xray-backend/.pytest-data-real/
+.pytest-cache-real/
+
 # ---- Python ----
 __pycache__/
 *.py[cod]

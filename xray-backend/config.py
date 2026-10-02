@@ -229,15 +229,16 @@ class Settings(BaseSettings):
     def db_file(self) -> Path:
         """cninfo.db 的路径。
 
-        解析顺序（自适应，不动用户的文件布局）：
-          1. DB_PATH 指向的文件确实存在 → 用它；
+        解析顺序（自适应，不动用户的数据库文件）：
+          1. `DATABASE_PATH` / `DB_PATH` 指向的文件确实存在（或显式给了绝对路径）→ 用它；
           2. 否则依次尝试候选：
-             data/cninfo.db（相对 xray-backend/）
-             ../data/cninfo.db（库放在仓库根）
-             ../xuejun-hackathon/data/cninfo.db（库放在产出它的项目里 —— 当前布局）
-          3. 都不存在 → 返回配置的路径（让 db.py 抛出带明确路径的错误）。
+             ../cninfo.db      （★ 仓库根目录 —— 当前布局，见 BACKEND_INTEGRATION_TASKS.md）
+             data/cninfo.db    （相对 xray-backend/）
+             ../data/cninfo.db （库放在仓库根的 data/ 下）
+          3. 都不存在 → 返回配置的路径（让 db.py 抛出带明确路径的错误，
+             且绝不静默创建空库）。
 
-        DB_PATH_STRICT=true 时跳过第 2 步（只认 DB_PATH），
+        DB_PATH_STRICT=true 时跳过第 2 步（只认配置的路径），
         便于测试"库文件不存在 → 报清晰错误"这类场景。
         """
         configured = Path(self.DB_PATH)
@@ -254,10 +255,11 @@ class Settings(BaseSettings):
     def _db_candidates(self) -> list[Path]:
         """候选数据库路径（顺序即优先级）。"""
         return [
+            # ★ 仓库根目录：`git clone` 后把 cninfo.db 放在仓库根即可直接跑，
+            #   后端无需移动数据库文件（本轮联调的第一号阻塞项）。
+            BASE_DIR.parent / "cninfo.db",
             BASE_DIR / "data" / "cninfo.db",
             BASE_DIR.parent / "data" / "cninfo.db",
-            # 当前仓库布局：库与产出它的管道脚本同在 xuejun-hackathon/ 下
-            BASE_DIR.parent / "xuejun-hackathon" / "data" / "cninfo.db",
         ]
 
     @property

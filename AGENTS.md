@@ -16,7 +16,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 写 Next.js 代码前，先读取 `node_modules/next/dist/docs/` 中与改动相关的本地文档。
 - 前端与后端只通过 `POST /companies/{id}/ask` 的结构化 JSON 契约耦合；snake_case 到前端 camelCase 的转换集中放在 `src/lib/api.ts`。
 - `NEXT_PUBLIC_API_BASE_URL` 未配置时使用 Mock；后端超时、HTTP 错误或解析失败时必须自动降级为已核验演示数据，不能破坏 Demo。
-- 当前 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险。每套回答都要有独立 Answer、Claim、Signal 和 Evidence；前两套包含图表。
-- Evidence 页码使用 PDF 查看器页码：招股书第 323 页，2025 半年报第 8、9、43 页。
+- 当前 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险；另有第四问「你的员工喜欢吃水果吗？」用于演示证据不足。每套回答都要有独立 Answer、Claim、Signal 和 Evidence；前两套包含图表。
+- Evidence 页码使用 PDF 查看器页码，且必须与引用的 PDF 版本配套（两份 PDF 的页码不可混用）：招股说明书（注册稿，506 页）第 **321、322、324** 页；2025 半年报（269 页）第 **8、9、43** 页。核验记录见 `docs/HANDOFF.md` 第 4.1 节。
+- `suggested_questions` 只返回上述四条，顺序固定，不要新增「司法风险」「现金流是否健康」等额外推荐问题。
 - V0.2 的夜间更新、Snapshot、维护模式是目标架构，目前尚未在此前端实现；不要把规划写成已完成功能。
 - 交接现状、运行方法、关键文件和后续事项见 `docs/HANDOFF.md`。
