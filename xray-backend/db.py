@@ -616,6 +616,11 @@ def get_company_summary(stock_code: str, *, recent: int = 5) -> dict[str, Any] |
 #: 只读查询的默认过滤条件（字符串常量，绝不拼接用户输入）
 _VALID_DOC_FILTER = "parse_status = 'ok' AND superseded = 0"
 
+#: `docs.text_content` 里的页界标记，形如 `--- 第8页 ---`。
+#: 实测：标记里的页码 = PDF 查看器页码（与 chunks.page_number 口径一致），
+#: 因此招股书这类"没有 chunks"的文档也能靠它核验引用页码。
+_PAGE_MARKER = re.compile(r"---\s*第(\d+)页\s*---")
+
 
 def _columns(con: sqlite3.Connection, table: str) -> set[str]:
     """某张表的真实列名；表不存在返回空集合。"""
@@ -828,6 +833,96 @@ def find_pages(document_id: int, needle: str, *, limit: int = 20) -> list[int]:
     return [int(r["page_number"]) for r in rows]
 
 
+def page_from_markers(document_id: int, needle: str, *, limit: int = 20) -> list[int]:
+    """在 `docs.text_content` 的「--- 第N页 ---」分页标记里定位 `needle` 的页码。
+
+    为什么需要它：**招股书的 `chunks` 表是空的**（管道只给年报/半年报切了页），
+    但 `docs.text_content` 自带「--- 第N页 ---」页界标记，且该标记与 PDF 查看器
+    页码一一对应（同一份 269 页半年报用两种方式查第 8 页，命中同一段原文）。
+    没有这个函数，招股书的引用页码就只能"抄"，无法核验。
+
+    只读、参数化 LIKE（转义 % / _）。`needle` 里的空白会被逐个匹配 ——
+    PDF 文本层的换行位置与人工摘录不同，故按"段"匹配而不是整串匹配。
+    """
+    text = (needle or "").strip()
+    if not text:
+        return []
+    if not isinstance(document_id, int):
+        raise ValueError("document_id 必须是整数")
+    if limit < 1:
+        raise ValueError("limit 必须 >= 1")
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        row = con.execute(
+            "SELECT text_content FROM docs WHERE id = ?", (document_id,)
+        ).fetchone()
+
+    body = str(row["text_content"] or "") if row else ""
+    if not body:
+        return []
+
+    # 先按页切段（页界标记本身不属于任何一页的正文）
+    spans: list[tuple[int, int, int]] = []  # (page, start, end)
+    for match in _PAGE_MARKER.finditer(body):
+        spans.append((int(match.group(1)), match.start(), match.end()))
+    if not spans:
+        return []
+
+    # ★ 判定标准是「**忽略空白后仍为连续子串**」——这才是"逐字原文"的可检验含义。
+    #   只按分词顺序查找会放过大量假命中（一个金额 token 在整篇里出现几十次），
+    #   所以这里先把正文和 needle 都压掉空白，再做真正的子串匹配，
+    #   并用偏移映射把命中位置还原回原始下标去定页。
+    squeezed_chars: list[str] = []
+    squeezed_to_raw: list[int] = []
+    for raw_index, ch in enumerate(body):
+        if ch.isspace():
+            continue
+        squeezed_chars.append(ch)
+        squeezed_to_raw.append(raw_index)
+    squeezed = "".join(squeezed_chars)
+    needle = "".join(text.split())
+    if not needle:
+        return []
+
+    #: needle 里可能含页界标记文本（极不可能），先排除掉再匹配
+    hits: list[int] = []
+    search_from = 0
+    while len(hits) < limit:
+        found = squeezed.find(needle, search_from)
+        if found < 0:
+            break
+        raw_index = squeezed_to_raw[found]
+        page = _page_at(spans, raw_index)
+        if page is not None and page not in hits:
+            hits.append(page)
+        search_from = found + 1
+    return sorted(hits)
+
+
+def _page_at(spans: list[tuple[int, int, int]], offset: int) -> int | None:
+    """offset 落在哪一页。
+
+    规则：取「最后一个 end <= offset 的页段」，即"已经越过了第 N 页的页界标记"。
+
+    ⚠️ 这里**不能**用 `start <= offset < end` 判定：归一化文本里，
+    本页正文从「本页标记结束」一直延伸到「下一页标记开始」，那一段并不落在本页
+    segment 的 [start, end) 区间内。用区间判定会让落在页尾的命中返回 None，
+    表现为"引文在文档里找不到"（这个坑真实踩过：营业收入那段就落在第 7 页页尾）。
+
+    标记自身之前若还有内容（扉页），归不到任何页 → 返回 None。
+    """
+    if not spans:
+        return None
+    page: int | None = None
+    for candidate_page, _start, end in spans:
+        if end <= offset:
+            page = candidate_page
+        else:
+            break
+    return page
+
+
 def document_title(document_id: int) -> str | None:
     """文档标题（file_name）；查不到返回 None。"""
     if not isinstance(document_id, int):
@@ -952,6 +1047,7 @@ __all__ = [
     "get_stocks",
     "has_extended_schema",
     "normalize_cn_digits",
+    "page_from_markers",
     "parse_announce_date",
     "parse_created_at",
     "search_announcements",

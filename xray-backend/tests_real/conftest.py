@@ -31,16 +31,30 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # ⚠️ 必须在导入任何项目模块之前设置环境（config.settings 在导入时固化）。
 #
-# 这里**只设 DB_PATH**，刻意不设 LLM_FAKE / DEEPSEEK_API_KEY：
+# 这里**只设库路径**，刻意不设 LLM_FAKE / DEEPSEEK_API_KEY：
 #   * 三条 Demo 的意义就是"不依赖大模型也能演示"，用假 LLM 兜住就等于没测到；
 #   * 真 Key 由 .env 提供，但本目录的测试不会真的发起网络请求
 #     （client fixture 会关掉 LLM_ENABLED）。
+#
+# 真实库定位顺序（BACKEND_INTEGRATION_TASKS.md「P0-1」）：
+#   1. XRAY_REAL_DB（本测试目录专用覆盖）
+#   2. DATABASE_PATH（规范名）
+#   3. 仓库根目录 cninfo.db —— 默认布局，**无需移动数据库**
+# 三者都没有 → real_db_path fixture 会 skip 整个目录（而不是伪造一个库）。
 # ---------------------------------------------------------------------------
 
-_REAL_DB = PROJECT_ROOT.parent / "xuejun-hackathon" / "data" / "cninfo.db"
 
-#: 允许用环境变量覆盖（例如库在别处）
-_REAL_DB = Path(os.environ.get("XRAY_REAL_DB", str(_REAL_DB)))
+def _resolve_real_db() -> Path:
+    """按 XRAY_REAL_DB → DATABASE_PATH → 仓库根 cninfo.db 的顺序定位真实库。"""
+    for env_name in ("XRAY_REAL_DB", "DATABASE_PATH"):
+        value = (os.environ.get(env_name) or "").strip()
+        if value:
+            candidate = Path(value)
+            return candidate if candidate.is_absolute() else (PROJECT_ROOT / candidate)
+    return PROJECT_ROOT.parent / "cninfo.db"
+
+
+_REAL_DB = _resolve_real_db()
 
 os.environ["DB_PATH"] = str(_REAL_DB)
 os.environ["DATABASE_PATH"] = str(_REAL_DB)
@@ -104,7 +118,7 @@ def real_db_path() -> Path:
     if not _REAL_DB.is_file():
         pytest.skip(
             f"真实库不存在：{_REAL_DB}\n"
-            f"请把 cninfo.db 放到 xuejun-hackathon/data/，或用 XRAY_REAL_DB 指定路径。"
+            f"请把 cninfo.db 放到仓库根目录，或用 XRAY_REAL_DB / DATABASE_PATH 指定路径。"
         )
     return _REAL_DB
 

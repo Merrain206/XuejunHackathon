@@ -1,0 +1,33 @@
+services:
+  ai-web-ppt:
+    build: .
+    image: ai-web-ppt:latest
+    container_name: ai-web-ppt
+    restart: unless-stopped
+    # 端口从 .env 读，默认 8787:8787
+    ports:
+      - "${PORT:-8787}:8787"
+    # 密钥只走 .env（已在 .gitignore 中排除），容器内不写死任何值
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8787
+      # 容器里落盘到挂载卷，宿主机可直达
+      OUTPUT_DIR: /app/.exports
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKERS: ${WORKERS:-2}
+    volumes:
+      - ./.exports:/app/.exports
+      - ./logs:/app/logs
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

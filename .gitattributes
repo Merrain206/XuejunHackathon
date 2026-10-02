@@ -1,0 +1,23 @@
+# 统一换行符策略：仓库内一律存 LF，检出到 Windows 时按需转换。
+# 不加这一条的话，Windows 上 git add 会对每个文本文件刷
+# "LF will be replaced by CRLF" 警告（不影响内容，但很吵）。
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.pptx  binary
+*.docx  binary
+*.db    binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+
+# Windows 批处理必须保留 CRLF，否则 cmd 解析可能出问题
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Shell 脚本必须保留 LF，否则在 Linux 上执行会报 bad interpreter
+*.sh    text eol=lf

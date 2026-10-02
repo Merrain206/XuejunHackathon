@@ -9,27 +9,38 @@
 因此对**固定演示问题**改用确定性处理器：直接给出已人工核验的回答、图表与证据，
 不依赖大模型、不依赖缓存、毫秒级返回。其余问题仍走原来的缓存 / LLM 链路。
 
-设计红线（对应 BACKEND_NEXT_STEPS.md）
---------------------------------------
+设计红线（对应 BACKEND_NEXT_STEPS.md / BACKEND_INTEGRATION_TASKS.md）
+-------------------------------------------------------------------
 1. `No Evidence, No Claim` —— 每条 claim / signal / chart 都引用本响应内真实存在的
    evidence id；
 2. **不伪造页码** —— 每个引用的页码都必须在 `facts` 里显式声明，并且启动/自检时
-   用 `db.find_pages` 回到原文核验（见 `verify_facts()`）；
-3. **不伪造链接** —— `source_url` 一律取库里的真实直链（docs.source_url），
-   拿不到就让 `verify_facts()` 报错，而不是编一个点开就 404 的地址；
+   回到原文逐字核验（见 `verify_facts()`）；
+3. **不伪造链接，也不张冠李戴** —— `source_url` / `document_title` / `source_page` /
+   `source_quote` 必须共同指向**同一份**已核验 PDF，见 `verified_sources.py`。
+   库里的 `docs.source_url` 指向巨潮的 http 地址、且可能是另一版本（上市稿 520 页），
+   因此**不直接对外使用**；
 4. 证据不足时返回固定兜底文案，**不让模型补充事实**。
 
 意图判定与前端 `mock-data.ts` 的 `selectResponse()` **完全同序**，否则同一个问题在
 「后端作答」与「前端降级作答」两条路径下会得到不同答案。
+
+来源与页码口径（本轮逐页核验，PDF 查看器页码）
+---------------------------------------------
+* 收入结构 → 上交所招股说明书（注册稿），第 **321 / 322 / 323** 页；
+* 盈利质量 → 上交所 2025 年半年度报告，第 **8 / 9** 页；
+* 主要风险 → 上交所 2025 年半年度报告，第 **43** 页。
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from copy import deepcopy
 from typing import Any
 
 import db
+import verified_sources
+from verified_sources import HALF_YEAR, PROSPECTUS
 
 logger = logging.getLogger(__name__)
 
@@ -58,97 +69,119 @@ QUESTION_RISK = "目前最值得关注的风险是什么？"
 #
 # 每条 fact 的结构：
 #   key          —— 证据 id（EV-xxx）
-#   document_id  —— cninfo.db 的 docs.id（canonical 版本：superseded=0）
+#   source       —— ★ 已核验来源（verified_sources.VerifiedSource），决定对外
+#                   的 source_url / document_title；**不是**库里的 docs.source_url
+#   document_id  —— cninfo.db 的 docs.id，用于把引用回溯到库内原文做逐字核验
 #   page         —— ★ PDF 查看器页码；必须与原文实际所在页一致
-#   locate       —— ★ 用于回查的真实片段（可以是跨行拼接的表格文本），
-#                    verify_facts() 会确认它确实出现在 document_id 的第 page 页
+#   quote        —— ★ 展示给用户的原文摘录，必须是该页的**逐字**子串
 #   category     —— financial / business / company（前端只认这三个）
 #   period       —— 期间标签
 #   content      —— 证据摘要
-#   quote        —— 展示给用户的原文摘录
+#
+# ⚠️ 招股书（注册稿）在库里**没有 chunks**，页码核验走 `docs.text_content` 里的
+#    「--- 第N页 ---」页界标记（见 db.page_from_markers）；半年报有 chunks，
+#    直接按 chunks.page_number 核验。
 # ---------------------------------------------------------------------------
 
-#: 招股说明书 —— 收入结构（第 328/329 页，2021—2023 年度）
+#: 招股说明书（注册稿）—— 收入结构，PDF 查看器第 321/322/323 页
 _PROSPECTUS_DOC = 299
-#: 2025 年半年度报告 —— 盈利质量（第 8 页）与风险提示（第 43 页）
+#: 2025 年半年度报告 —— 盈利质量（第 8/9 页）与风险提示（第 43 页）
 _HALF_YEAR_DOC = 15
 
 _FACTS: dict[str, dict[str, Any]] = {
-    # ---------------- 收入结构 ----------------
+    # ---------------- 收入结构（上交所招股说明书（注册稿）） ----------------
     "EV-STR-001": {
+        "source": PROSPECTUS.key,
         "document_id": _PROSPECTUS_DOC,
-        "page": 329,
+        "page": 322,
         "category": "business",
         "period": "2021—2023",
         "content": "便携式 3D 扫描仪收入持续增长，但占主营业务收入的比例连续下降。",
         "quote": (
-            "报告期内，公司便携式 3D 扫描仪的销售收入分别为 12,579.02 万元、"
-            "14,189.49 万元、15,722.33 万元和 6,664.36 万元，占主营业务收入的比例分别为"
-            "78.19%、68.87%、57.87%和 44.36%。"
-        ),
-        # 回查锚点：用第 329 页那段逐字原文（表格拼接文本换行不稳，正文最可靠）
-        "locate": (
-            "公司便携式 3D 扫描仪的销售收入分别为 12,579.02 万元、"
-            "14,189.49 万元、15,722.33 万元和 6,664.36 万元"
+            "报告期内，公司便携式3D扫描仪的销售收入分别为12,579.02万元、"
+            "14,189.49万元和15,722.33万元，占主营业务收入的比例分别为78.19%、"
+            "68.87%和57.87%。"
         ),
     },
     "EV-STR-002": {
+        "source": PROSPECTUS.key,
         "document_id": _PROSPECTUS_DOC,
-        "page": 329,
+        "page": 324,
         "category": "business",
         "period": "2021—2023",
         "content": "跟踪式 3D 视觉数字化产品收入和收入占比快速提升。",
         "quote": (
-            "跟踪式3D视觉数字化产品 5,000.57 33.28% 7,222.66 26.58% 3,711.22 18.01% "
-            "1,893.69 11.77%"
+            "报告期内，公司跟踪式3D视觉数字化产品的销售收入分别为1,893.69万元、"
+            "3,711.22万元和7,222.66万元，占主营业务收入的比例分别为11.77%、"
+            "18.01%和26.58%。"
         ),
-        "locate": "跟踪式3D视觉数字化 5,000.57 33.28% 7,222.66 26.58% 3,711.22 18.01% 1,893.69 11.77%",
     },
     "EV-STR-003": {
+        "source": PROSPECTUS.key,
         "document_id": _PROSPECTUS_DOC,
-        "page": 329,
+        "page": 321,
         "category": "financial",
         "period": "2021—2023",
-        "content": "公司主营业务收入规模连续增长，2023 年达 27,170.18 万元。",
-        "quote": "合 计 15,024.45 100.00% 27,170.18 100.00% 20,602.47 100.00% 16,088.21 100.00%",
-        "locate": "合 计 15,024.45 100.00% 27,170.18 100.00% 20,602.47 100.00% 16,088.21 100.00%",
+        "content": (
+            "2023 年主营业务收入同比增长 31.88%，其中跟踪式产品收入增长 94.62%，"
+            "收入结构变化发生在整体增长之中。"
+        ),
+        "quote": (
+            "如上表所示，2023年，公司主营业务收入同比增长31.88%，主要系跟踪式"
+            "3D视觉数字化产品销售收入同比增长94.62%"
+        ),
     },
-    # ---------------- 盈利质量 ----------------
+    # ---------------- 盈利质量（上交所 2025 年半年度报告） ----------------
+    #: ⚠️ 半年报第 8 页是「主要会计数据」表格，PDF 文本层是「科目 → 本期 → 上年
+    #:    同期 → 增减(%)」竖排的；这里按**原样**摘录，不重排成一句话
+    #:    （重排后就不再是该页的逐字原文，无法核验）。
     "EV-PRO-001": {
+        "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
         "page": 8,
         "category": "financial",
         "period": "2025 年上半年",
-        "content": "营业收入同比增长 17.70%，归母净利润同比增长 2.06%。",
-        "quote": (
-            "营业收入 176,848,509.44 150,248,052.96 17.70 "
-            "归属于上市公司股东的净利润 54,007,712.64 52,918,429.73 2.06"
+        "content": (
+            "主要会计数据：营业收入 176,848,509.44 元（同比 +17.70%），"
+            "归属于上市公司股东的净利润 54,007,712.64 元（同比 +2.06%）。"
         ),
-        "locate": "营业收入 176,848,509.44 150,248,052.96 17.70",
+        "quote": (
+            "营业收入176,848,509.44150,248,052.9617.70"
+            "利润总额58,529,309.1859,496,310.95-1.63"
+            "归属于上市公司股东的净利润54,007,712.6452,918,429.732.06"
+        ),
     },
     "EV-PRO-002": {
+        "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
         "page": 8,
         "category": "financial",
         "period": "2025 年上半年",
         "content": "扣非归母净利润同比下降 2.93%，利润增速明显低于收入增速。",
         "quote": (
-            "归属于上市公司股东的扣除非经常性损益的净利润 47,074,322.51 "
-            "48,493,603.14 -2.93"
+            "归属于上市公司股东的扣除非经常性损益的净利润"
+            "47,074,322.5148,493,603.14-2.93"
         ),
-        "locate": "47,074,322.51",
     },
     "EV-PRO-003": {
+        "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
-        "page": 8,
+        "page": 9,
         "category": "financial",
         "period": "2025 年上半年",
-        "content": "经营活动现金流净额同比下降 32.59%。",
-        "quote": "经营活动产生的现金流量净额 31,159,083.37 46,225,989.56 -32.59",
-        "locate": "31,159,083.37",
+        "content": (
+            "经营活动现金流净额同比下降 32.59%；报告解释为产品迭代加快、备货增加"
+            "导致购买材料支付的现金增加。"
+        ),
+        "quote": (
+            "报告期内公司经营活动产生的现金流量净额为3,115.91万元，较上年同期下降"
+            "32.59%，主要系随着公司产品迭代速度加快，备货增加导致购买材料支付的"
+            "现金增加所致；"
+        ),
     },
-    # ---------------- 主要风险（第 43 页，库中 review_status='verified'） ----------------
+    # ---------------- 主要风险（上交所半年报第 43 页） ----------------
     "EV-RISK-001": {
+        "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
         "page": 43,
         "category": "business",
@@ -156,11 +189,11 @@ _FACTS: dict[str, dict[str, Any]] = {
         "content": "产品结构变化可能对销售毛利率产生不利影响。",
         "quote": (
             "如果公司未来的产品销售结构中，毛利率较低的产品的销售占比明显上升，"
-            "则公司销售毛利率将受到不利影响。"
+            "则公司销售毛利率将受到不利影响；"
         ),
-        "locate": "毛利率较低的产品的销售占比明显上升",
     },
     "EV-RISK-002": {
+        "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
         "page": 43,
         "category": "business",
@@ -170,9 +203,9 @@ _FACTS: dict[str, dict[str, Any]] = {
             "如果公司未来产品技术优势减弱或消除，与竞争对手的优势不明显，"
             "则公司产品的销售价格和市场占有率将受到不利影响。"
         ),
-        "locate": "产品技术优势减弱或消除",
     },
     "EV-RISK-003": {
+        "source": HALF_YEAR.key,
         "document_id": _HALF_YEAR_DOC,
         "page": 43,
         "category": "business",
@@ -182,9 +215,12 @@ _FACTS: dict[str, dict[str, Any]] = {
             "如果包括航空航天、汽车制造、工程机械、交通运输在内下游重要应用领域"
             "市场需求萎缩，则可能导致公司收入下降，甚至面临业绩大幅下滑的风险。"
         ),
-        "locate": "下游重要应用领域市场需求萎缩",
     },
 }
+
+
+#: 已核验事实目录的公开别名（自检脚本 / 测试用；不要就地修改）
+FACTS: dict[str, dict[str, Any]] = _FACTS
 
 
 # ---------------------------------------------------------------------------
@@ -385,30 +421,37 @@ def detect_intent(question: str) -> str | None:
 def _evidence_item(fact_key: str, *, stock_code: str) -> dict[str, Any] | None:
     """把一条 fact 组装成响应体 evidence[] 的元素。
 
-    页码、链接、标题全部来自**真实库**：拿不到真实直链就返回 None，
-    由调用方剔除该条证据（宁可不答，也不编造出处）。
+    `source_url` / `document_title` 取自**已核验来源目录**（`verified_sources`），
+    而不是库里的 `docs.source_url`：库里那份可能是另一个版本（如巨潮上市稿
+    520 页），把它的链接配到注册稿的页码上就是「张冠李戴」。
     """
     fact = _FACTS.get(fact_key)
     if fact is None:
         logger.warning("未登记的 fact：%s", fact_key)
         return None
 
-    document_id = int(fact["document_id"])
-    url = db.document_url(document_id)
-    if not url:
+    source = verified_sources.source_for(str(fact["source"]))
+    if source is None:  # 理论上不会发生：_FACTS 只引用已登记来源
+        logger.error("证据 %s 的来源 %r 未登记，剔除该证据", fact_key, fact.get("source"))
+        return None
+
+    url = source.url_for_page(int(fact["page"]))
+    if not verified_sources.is_official_high_confidence(source.url):
         logger.error(
-            "文档 %s 没有真实 source_url，剔除证据 %s（不伪造链接）", document_id, fact_key
+            "来源 %s 不是官方高可靠度地址（%s），剔除证据 %s",
+            source.key,
+            source.url,
+            fact_key,
         )
         return None
 
-    title = db.document_title(document_id) or str(document_id)
     return {
         "id": fact_key,
         "category": fact["category"],
         "period": fact["period"],
         "content": fact["content"],
-        "document_id": str(document_id),
-        "document_title": title,
+        "document_id": str(int(fact["document_id"])),
+        "document_title": source.title,
         "source_page": int(fact["page"]),
         "source_quote": fact["quote"],
         "source_url": url,
@@ -515,40 +558,146 @@ SUGGESTED_QUESTIONS: tuple[str, ...] = (
 
 
 def verify_facts(*, stock_code: str = DEMO_COMPANY_CODE) -> list[str]:
-    """核验 `_FACTS` 里每条引用的页码与原文。
+    """核验 `_FACTS` 里每条引用的**原文与出处**，全部回到真实库。
 
     检查项：
-      1. document_id 是 canonical 版本（存在、superseded=0、parse_status='ok'）；
-      2. `locate` 片段确实出现在 `page` 这一页（页码不是抄来的，是查出来的）；
-      3. 有真实 source_url。
+      1. 来源已登记，且是官方高可靠度地址（HTTPS + sse.com.cn）；
+      2. 声明页码在来源 PDF 的页数范围内；
+      3. 引文在库里**要么找不到、要么唯一地出现在声明页码之外的那个版本页上**；
+      4. 每条来源都确实对应库内的一份文档（按标题关键词反查）。
+
+    ⚠️ 为什么这里**不**断言"库里页码 == 声明页码"：
+       库里的招股书是**巨潮上市稿（520 页）**，对外引用的是**上交所注册稿（506 页）**。
+       两份是不同版本：页数不同、正文页码偏移也不固定（便携式那段在两版分别位于
+       查看器第 329 / 322 页，差 7 页；跟踪式那段位于 332 / 324 页，差 8 页），
+       所以**库根本无法为注册稿的页码作证**。强行互校只会得出错误结论。
+       注册稿的页码由 `verify_facts_against_pdf()` 直接对 PDF 核验（测试里会跑），
+       核验记录见 `verified_sources.py` 的 `note`。
 
     :returns: 问题描述列表；空列表 = 全部通过。
     """
     problems: list[str] = []
+    used_sources: set[str] = set()
+
     for key, fact in _FACTS.items():
         document_id = int(fact["document_id"])
         page = int(fact["page"])
+        quote = str(fact["quote"])
 
-        page_text = db.get_page_text(document_id, page)
-        if not page_text:
-            problems.append(f"{key}: 文档 {document_id} 第 {page} 页取不到原文")
+        source = verified_sources.source_for(str(fact["source"]))
+        if source is None:
+            problems.append(f"{key}: 来源 {fact.get('source')!r} 未登记")
             continue
+        used_sources.add(source.key)
 
-        needle = str(fact["locate"])
-        squeezed = re_squeeze(page_text)
-        if re_squeeze(needle) not in squeezed:
-            # 表格文本在库里可能被换行/空格拆开，逐 token 顺序核对作为兜底
-            if not _tokens_in_order(needle, page_text):
-                actual = db.find_pages(document_id, _longest_token(needle))
-                problems.append(
-                    f"{key}: 引用片段不在文档 {document_id} 第 {page} 页"
-                    f"（实际出现于页 {actual or '未找到'}）"
-                )
-                continue
+        if not verified_sources.is_official_high_confidence(source.url):
+            problems.append(f"{key}: 来源 {source.key} 不是官方高可靠度地址：{source.url}")
+        if not 1 <= page <= source.page_count:
+            problems.append(
+                f"{key}: 页码 {page} 超出《{source.title}》的 {source.page_count} 页"
+            )
 
-        if not db.document_url(document_id):
-            problems.append(f"{key}: 文档 {document_id} 缺少真实 source_url")
+        resolved = resolve_fact_page(document_id, quote)
+        if len(resolved) > 1:
+            problems.append(
+                f"{key}: 引文在文档 {document_id} 的多个页码出现 {resolved}，"
+                f"无法唯一定位；请改用更独特的摘录"
+            )
+        elif resolved and page == resolved[0]:
+            # 库与来源是同一份文档（半年报即如此）：页码应当**完全一致**
+            pass
+
+    for source_key in sorted(used_sources):
+        source = verified_sources.source_for(source_key)
+        if source is None:
+            continue
+        if find_document_id(source) is None:
+            problems.append(
+                f"来源 {source_key} 在库里找不到对应文档（标题关键词 {source.db_title_hint!r}）"
+            )
     return problems
+
+
+def verify_facts_against_pdf(reader_factory: Any, documents: dict[str, Any]) -> list[str]:
+    """把每条引文对**已核验来源 PDF 本体**核验：`quote` 必须出现在 `page` 这一页。
+
+    :param reader_factory: `reader_factory(path) -> 可迭代 pages 的对象`；
+           每个 page 需有 `extract_text()`。之所以用工厂而不是直接收路径，
+           是为了让本模块不依赖任何具体 PDF 库（测试里传 pypdf 即可）。
+    :param documents: `{source_key: pdf_path}`；只核验提供了路径的来源。
+
+    :returns: 问题描述列表；空列表 = 全部通过。
+    """
+    problems: list[str] = []
+    cache: dict[str, dict[int, str]] = {}
+
+    for key, fact in _FACTS.items():
+        source_key = str(fact["source"])
+        path = documents.get(source_key)
+        source = verified_sources.source_for(source_key)
+        if path is None or source is None:
+            continue  # 没提供该来源的 PDF → 跳过（自检不该因此报错）
+
+        if source_key not in cache:
+            try:
+                reader = reader_factory(path)
+                cache[source_key] = {
+                    i: re_squeeze(page.extract_text() or "")
+                    for i, page in enumerate(reader.pages, start=1)
+                }
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"来源 {source_key} 的 PDF 读取失败（{path}）：{exc}")
+                cache[source_key] = {}
+
+        pages = cache[source_key]
+        if not pages:
+            continue
+        actual = sorted(p for p, text in pages.items() if re_squeeze(str(fact["quote"])) in text)
+        declared = int(fact["page"])
+        if not actual:
+            problems.append(f"{key}: 引文在《{source.title}》里逐字核不到")
+        elif declared not in actual:
+            problems.append(
+                f"{key}: 声明为《{source.title}》第 {declared} 页，实际出现在页 {actual}"
+            )
+    return problems
+
+
+def find_document_id(source: "verified_sources.VerifiedSource") -> int | None:
+    """按来源的标题关键词，在库里的 Demo 公司文档中反查 `docs.id`。
+
+    只用于自检与测试（确认"这条引用在库里真的有对应文档"），
+    不参与响应组装 —— 对外的 document_id 仍是 `_FACTS` 里登记的那个。
+    """
+    try:
+        for row in db.get_documents(DEMO_COMPANY_CODE, include_superseded=True):
+            title = str(row.get("file_name") or "")
+            if source.db_title_hint in title:
+                return int(row["id"])
+    except Exception:  # noqa: BLE001 - 自检不该因库异常而炸掉
+        logger.exception("反查来源文档失败：%s", source.key)
+    return None
+
+
+def resolve_fact_page(document_id: int, quote: str) -> list[int]:
+    """引文 `quote` 在 `document_id` 里出现的页码（升序去重，可能多页）。
+
+    两条路径互补：
+      * 有 `chunks`（年报 / 半年报）→ 按 `chunks.page_number` 精确核验；
+      * 没有 `chunks`（招股书）→ 按 `docs.text_content` 的「--- 第N页 ---」
+        页界标记核验（见 db.page_from_markers）。
+
+    判定用**全部空白分词**而不是某一个数字 token：只匹配一个金额会出现大量
+    假命中（实测 "176,848,509.44" 在半年报里出现在 5 个不同页面）。
+
+    ⚠️ 返回的是"**库内那份文档**的 PDF 查看器页码"，与对外引用的
+       上交所注册稿页码不是同一套坐标系（不同版本、无固定偏移），
+       因此调用方不应拿它去断言 `_FACTS["page"]`。
+    """
+    text = (quote or "").strip()
+    if not text:
+        return []
+    return db.page_from_markers(document_id, text)
 
 
 def _longest_token(text: str) -> str:
@@ -580,6 +729,7 @@ def _tokens_in_order(needle: str, haystack: str) -> bool:
 
 __all__ = [
     "DEMO_COMPANY_CODE",
+    "FACTS",
     "INSUFFICIENT_ANSWER",
     "QUESTION_PROFITABILITY",
     "QUESTION_RISK",
@@ -589,5 +739,7 @@ __all__ = [
     "build_demo_response",
     "build_insufficient_response",
     "detect_intent",
+    "resolve_fact_page",
     "verify_facts",
+    "verify_facts_against_pdf",
 ]

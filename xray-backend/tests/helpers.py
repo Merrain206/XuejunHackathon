@@ -25,13 +25,20 @@ FORBIDDEN_KEYS: frozenset[str] = frozenset(
 #: 引用 evidence 的字段
 REFERENCING_FIELDS = ("claims", "signals", "charts")
 
+#: 一个**不命中任何稳定意图**的问题（用于验证兜底路径）。
+#:
+#: ⚠️ 不要用"这家公司有什么风险？"之类的问题当默认值：它含「风险」，
+#:    会被确定性处理器判成 risk 意图并正常作答 —— 那是**期望行为**，
+#:    不是兜底。兜底只对认不出意图的问题生效。
+UNMATCHED_QUESTION = "你们的员工喜欢吃水果吗？"
+
 #: 测试库里存在的公司代码
 CODES = ("688583", "000001", "600036")
 #: 确定不存在的代码
 MISSING_CODE = "999999"
 
 
-def post_ask(client: Any, stock_code: str, question: str = "这家公司有什么风险？"):
+def post_ask(client: Any, stock_code: str, question: str = UNMATCHED_QUESTION):
     return client.post(f"/companies/{stock_code}/ask", json={"question": question})
 
 

@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,6 +29,7 @@ from fastapi.testclient import TestClient
 import db
 import demo_handlers
 import response_validator
+import verified_sources
 from config import settings
 
 DEMO_CODE = demo_handlers.DEMO_COMPANY_CODE  # 688583
@@ -210,23 +213,95 @@ def test_acceptance_8_source_page_and_url_complete(client: TestClient, question:
 
 
 def test_acceptance_8b_pages_match_the_real_document(real_db: None):
-    """页码必须能在真实库里核到（不是抄来的、也不是猜的）。"""
+    """引文必须能在库里核到（不是抄来的、也不是猜的）。"""
     problems = demo_handlers.verify_facts()
     assert problems == [], f"引用核验未通过：{problems}"
 
 
 def test_acceptance_8c_demo_pages_are_the_verified_ones(real_db: None):
-    """回归保护：招股书引用是第 329 页（有人误传成 323），半年报是 8 / 43 页。"""
+    """回归保护：三条 Demo 的**PDF 查看器页码**必须与已核验口径一致。
+
+    口径（BACKEND_INTEGRATION_TASKS.md「P0-2」+ 本轮逐页核验）：
+      * 收入结构 → 上交所招股说明书（注册稿）第 321 / 322 / 324 页；
+      * 盈利质量 → 上交所 2025 年半年度报告第 8 / 8 / 9 页；
+      * 主要风险 → 上交所 2025 年半年度报告第 43 页。
+
+    ⚠️ 招股书三条**不是**同一页：
+        - 321 页：主营业务收入合计 + 同比变动表（31.88% / 94.62%）；
+        - 322 页：便携式 3D 扫描仪那段（78.19% → 57.87%）；
+        - 324 页：跟踪式 3D 视觉数字化产品那段（11.77% → 26.58%）。
+      第 323 页只讲彩色扫描仪与五大系列，**没有**跟踪式收入数据，
+      所以跟踪式那条不能标成 323（前端 mock-data.ts 里的 323 需同步修正）。
+    """
     payload = demo_handlers.build_demo_response(DEMO_CODE, Q_STRUCTURE)
     assert payload is not None
-    pages = {e["source_page"] for e in payload["evidence"]}
-    assert pages == {329}, f"招股书收入结构证据的页码应为 329，实际 {pages}"
+    pages = {e["id"]: e["source_page"] for e in payload["evidence"]}
+    assert pages == {"EV-STR-001": 322, "EV-STR-002": 324, "EV-STR-003": 321}, pages
 
     prof = demo_handlers.build_demo_response(DEMO_CODE, Q_PROFITABILITY)
-    assert {e["source_page"] for e in prof["evidence"]} == {8}
+    assert {e["source_page"] for e in prof["evidence"]} == {8, 9}
 
     risk = demo_handlers.build_demo_response(DEMO_CODE, Q_RISK)
     assert {e["source_page"] for e in risk["evidence"]} == {43}
+
+
+def test_acceptance_8d_prospectus_quotes_verified_against_the_pdf(real_db: None):
+    """招股书的逐字原文与页码，直接对**注册稿 PDF 本体**核验。
+
+    为什么需要这一步：库里的招股书是**巨潮上市稿（520 页）**，对外引用的是
+    **上交所注册稿（506 页）**。两版页数不同、页码偏移也不固定
+    （便携式那段：329 → 322；跟踪式那段：332 → 324），
+    所以库**无法**为注册稿的页码作证 —— 只能拿 PDF 本体核。
+
+    运行前提（缺了会 skip，而不是失败）：
+      * 本机有 pypdf / PyPDF2；且
+      * 用 XRAY_PROSPECTUS_PDF 指向注册稿 PDF（或放到
+        `xray-backend/.cache-pdf/prospectus_sse.pdf`）。
+
+    PDF 地址见 `verified_sources.PROSPECTUS_URL`（可直接下载）。
+    """
+    reader_factory = _pdf_reader_factory()
+    if reader_factory is None:
+        pytest.skip("本机没有 pypdf / PyPDF2，无法对 PDF 本体核验（pip install pypdf）")
+
+    path = _prospectus_pdf_path()
+    if path is None:
+        pytest.skip(
+            "未找到注册稿 PDF；请下载 "
+            f"{verified_sources.PROSPECTUS_URL}\n"
+            "      然后设置 XRAY_PROSPECTUS_PDF，或放到 xray-backend/.cache-pdf/prospectus_sse.pdf"
+        )
+
+    problems = demo_handlers.verify_facts_against_pdf(
+        reader_factory, {verified_sources.PROSPECTUS.key: path}
+    )
+    assert problems == [], f"对注册稿 PDF 的核验未通过：{problems}"
+
+
+def _pdf_reader_factory():
+    """返回能读 PDF 的 reader 工厂；都没有就返回 None。"""
+    try:
+        from pypdf import PdfReader
+
+        return PdfReader
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from PyPDF2 import PdfReader  # type: ignore[no-redef]
+
+        return PdfReader
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _prospectus_pdf_path():
+    """注册稿 PDF 的路径：环境变量优先，其次约定的缓存目录。"""
+    candidate = (os.environ.get("XRAY_PROSPECTUS_PDF") or "").strip()
+    if candidate:
+        path = Path(candidate)
+        return path if path.is_file() else None
+    default = Path(__file__).resolve().parent.parent / ".cache-pdf" / "prospectus_sse.pdf"
+    return default if default.is_file() else None
 
 
 # ---------------------------------------------------------------------------
@@ -301,17 +376,67 @@ def test_demo_does_not_touch_llm_call_counter(client: TestClient):
 # ---------------------------------------------------------------------------
 
 
-def test_evidence_urls_are_real_official_links(client: TestClient):
-    """三条 Demo 的证据必须指向真实可达的公告直链，而不是列表页兜底。"""
+def test_evidence_urls_are_official_high_confidence(client: TestClient):
+    """三条 Demo 的证据必须指向**上交所 HTTPS 原始 PDF**（前端判为高可靠度）。
+
+    前端 `api.ts` 的可靠度规则是「HTTPS + sse.com.cn 或其子域名」。
+    此前后端样例给的是 `http://static.cninfo.com.cn/...`，页面因此显示
+    「中可靠度」—— 原文是真的，但展示等级掉了。本用例把这条口径钉住。
+    """
     for question in STABLE_QUESTIONS:
         payload = _ask(client, question)
         for ev in payload["evidence"]:
             url = ev["source_url"]
-            assert "cninfo.com.cn" in url or url.endswith(".pdf") or url.endswith(".PDF"), (
-                f"{ev['id']} 的链接不像公告直链：{url}"
+            assert verified_sources.is_official_high_confidence(url), (
+                f"{ev['id']} 不是官方高可靠度地址（需 HTTPS + sse.com.cn）：{url}"
             )
-            # 必须真的是"深链"，不是 fallback 的检索列表页
-            assert "fulltextSearch" not in url, f"{ev['id']} 用的是列表页兜底：{url}"
+            # 必须真的是 PDF 深链，不是检索列表页、也不是公告页
+            base = url.split("#", 1)[0]
+            assert base.endswith(".pdf") or base.endswith(".PDF"), f"{ev['id']} 不是 PDF 地址：{url}"
+            assert "cninfo" not in base, f"{ev['id']} 不得给巨潮链接：{url}"
+
+            # 页码锚点必须与 source_page 一致（点开就能翻到那一页）
+            assert url.endswith(f"#page={ev['source_page']}"), (
+                f"{ev['id']} 的 URL 锚点与 source_page 不一致：{url}"
+            )
+
+
+def test_demo_sources_are_the_two_verified_sse_documents(client: TestClient):
+    """三条 Demo 只用两份已核验的上交所 PDF，且标题与 URL 一一对应。"""
+    expected = {
+        verified_sources.PROSPECTUS.url: verified_sources.PROSPECTUS.title,
+        verified_sources.HALF_YEAR.url: verified_sources.HALF_YEAR.title,
+    }
+    seen: set[str] = set()
+    for question in STABLE_QUESTIONS:
+        payload = _ask(client, question)
+        for ev in payload["evidence"]:
+            base = ev["source_url"].split("#", 1)[0]
+            assert base in expected, f"{ev['id']} 用了未登记的来源：{base}"
+            assert ev["document_title"] == expected[base], (
+                f"{ev['id']} 的标题与 URL 不匹配：{ev['document_title']!r} vs {base}"
+            )
+            seen.add(base)
+    assert seen == set(expected), f"两份权威 PDF 都应被用到，实际只用到 {seen}"
+
+
+def test_prospectus_and_half_year_never_mix_pages(client: TestClient):
+    """不得把一份 PDF 的页码配到另一份 PDF 上（本轮最危险的错误形态）。"""
+    for question, source_key in (
+        (Q_STRUCTURE, verified_sources.PROSPECTUS.key),
+        (Q_PROFITABILITY, verified_sources.HALF_YEAR.key),
+        (Q_RISK, verified_sources.HALF_YEAR.key),
+    ):
+        source = verified_sources.source_for(source_key)
+        payload = _ask(client, question)
+        for ev in payload["evidence"]:
+            assert ev["source_url"].startswith(source.url), (
+                f"{ev['id']} 属于《{source.title}》，URL 却指向 {ev['source_url']}"
+            )
+            assert 1 <= ev["source_page"] <= source.page_count, (
+                f"{ev['id']} 的页码 {ev['source_page']} 超出《{source.title}》"
+                f"的 {source.page_count} 页"
+            )
 
 
 # ---------------------------------------------------------------------------

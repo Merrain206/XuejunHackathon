@@ -1,7 +1,18 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# ============================================================================
+#  仓库根 .gitignore
+#  合并自两套历史：
+#    - 本地工作区规则（ai-web-ppt / xray-backend / 测试临时目录）
+#    - XuejunHackathon main 的 Next.js 规则（前端现在位于仓库根目录）
+#  子项目各自也有 .gitignore（git 会叠加生效）：
+#    ai-web-ppt/.gitignore        （若存在）
+#    xray-backend/.gitignore
+# ============================================================================
 
-# dependencies
+# ---- Node 依赖与缓存 ----
+node_modules/
 /node_modules
+.npm-cache/
+runtime/
 /.pnp
 .pnp.*
 .yarn/*
@@ -10,38 +21,80 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# ---- 构建产物 ----
+dist/
+build/
+/build
+.next/
 /.next/
 /out/
+/coverage
+web/dist/
+*.tsbuildinfo
+next-env.d.ts
 
-# production
-/build
-
-# misc
-.DS_Store
+# ---- 机密与本地配置 ----
+# 各项目有自己的 .env（ai-web-ppt/.env、xray-backend/.env、根目录 .env.local）
+# 全部排除，但保留 .env.example 模板
+.env
+.env*
+!.env.example
+.env.local
+.env.*.local
+*.env.local
 *.pem
+.ssh-key/
 
-# debug
+# ---- 运行期产出 ----
+outputs/
+uploads/
+logs/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.exports/
+*.pptx
 
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
+# ---- 附件副本（Harness 落盘的只读副本，非源码）----
+.attachments-tmp/
 
-# vercel
-.vercel
+# ---- 核验用临时产物（体积大，按需下载/生成，不入库）----
+xray-backend/.cache-pdf/
+xray-backend/.pytest-data-real/
+.pytest-cache-real/
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
 
-# database
+# ---- 测试与审计临时目录 ----
+.test-tmp/
+.pytest-run/
+.pytest-data/
+.pytest-tmp*/
+pytest-cache-files-*/
+
+# ---- 数据源（体积大、由外部提供，不入版本库）----
+data/
+cninfo_data/
 *.db
 *.db.bak*
-cninfo_data/
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# ---- 部署平台 ----
+.vercel
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
