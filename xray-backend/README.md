@@ -5,9 +5,26 @@
 **数据源**：`cninfo.db` 的 `docs` / `chunks` / `evidence` 表 —— 从 PDF 提取的**公告原文**。
 **三条稳定 Demo 问题**：由 `demo_handlers.py` 用**已核验的证据**确定性作答
 （不依赖大模型、不依赖缓存，毫秒级返回）。
-**其它问题**：返回固定兜底文案，不让模型补充事实。
-**扩展分析**：独立的批处理实验代码可由 DeepSeek 读原文生成风险报告，**每条结论必须附原文引用**；该链路不参与当前四问接口。
+**其它金融问题（四家公司）**：走**动态 Evidence-first 问答** —— 后端先检索候选证据并
+回到原文逐字核验，模型只能在候选集合里挑 id 组织答案，最后机械校验（见 ②）。
+**证据不足 / 覆盖面之外的问题**：返回固定兜底文案，**不调用模型**，不让模型补充事实。
 **调度**：应用内**不含**定时任务 —— 生产环境由系统 cron 驱动，demo 环境手动执行。
+
+### 决策顺序（`POST /companies/{code}/ask`）
+
+| 顺序 | 条件 | 走哪条路 | 是否调模型 |
+| ---: | --- | --- | --- |
+| 1 | 思看科技（688583）的三条稳定问题 | `demo_handlers` 确定性作答 | 否 |
+| 2 | 问题映射不到任何已知财务指标（如「员工喜欢吃水果」） | 固定兜底 | 否 |
+| 3 | 其他公司 / 其他金融问题，且检索到**核验通过**的候选证据 | 动态 Evidence-first | 是（可开关） |
+| 4 | 上面任一步失败、无证据、模型不可用、解析/校验失败 | 固定兜底（HTTP 200） | — |
+
+支持的公司：`688583`（思看科技）、`600570`、`000066`、`300558`。
+> 动态链路有**保命开关** `DYNAMIC_QA_ENABLED=false`：关掉后除稳定三问外一律证据不足，
+> 绝不影响演示基线。
+>
+> 本轮交付的 PR 描述（模型 / 耗时 / 成功与拒答问题 / 测试结果 / 已知限制）
+> 见 `docs/BACKEND_PR_NOTES.md`。
 
 ---
 
@@ -241,6 +258,97 @@ python scripts/check_frontend_contract.py
 
 ---
 
+## ②-补 动态 Evidence-first 问答（四家公司）
+
+### 一句话
+
+模型**没有**生成证据的能力：`evidence` 数组完全由后端从 `cninfo.db` 检索、
+并回到原文逐字核验过；模型只输出 `answer` / `claims` / `signals`，
+且只能引用本次候选集合里出现过的 id。
+
+```
+问题
+ → dynamic_evidence.retrieve_candidates()   参数化 SQL（每条都带 company_code）
+                                              + 默认过滤 parse_status='ok' AND superseded=0
+                                              + JOIN docs 取标题与真实链接
+ → 机械核验每条候选：页码是正整数且不越界、引文里的数字在该页逐字出现、
+   顺序一致、首末跨度 ≤ DYNAMIC_MAX_QUOTE_SPAN
+ → 生成 EV-001…EV-0NN 的**封闭候选集合**（6~15 条）
+ → dynamic_qa 组装 JSON-only Prompt → DeepSeek → 解析（含容错）
+ → 机械校验：悬空 id 丢弃、无证据条目丢弃、数字必须能在引文里核到
+ → 组装响应（P0 固定 charts: []）→ 再走统一出口 response_validator
+```
+
+### 引文核验为什么不是「整串子串匹配」
+
+库里 `evidence.source_quote` 是**按表格结构转写的**（列之间 `|`，
+如 `营业收入（元） | 7,958,051,684.14 | 6,366,241,242.46 | 25.00%`），
+而 PDF 文本层里同一段没有 `|`。整串匹配会 **100% 失败**（旧库实测 541/541 条全挂），
+而只比"去掉数字后的标签"又几乎全过（等于不校验）。
+
+因此核验规则是三条，缺一不可：
+
+1. 引文里每个**有意义数字**（去逗号后 ≥3 位、或百分数）必须在所引页面上逐字出现；
+2. 这些数字在页面上的**先后顺序**必须与引文一致（防止拿不同表格的单元格拼凑）；
+3. 首末数字在该页上的**跨度不得超过 `DYNAMIC_MAX_QUOTE_SPAN`**（默认 200 字符）——
+   保证它们确实属于同一段连续原文。
+
+实测（真实 `cninfo.db` 的 503 条 evidence）：机械核验通过 **485** 条，
+未通过的 18 条全部是**真问题**（16 条数字顺序与页面不一致、2 条跨度超限），
+另有 3 条**纯文字**的风险因素证据走下面的"无数字"口径。
+
+**例外：不含数字的定性引文**（风险因素、政策表述）。新库里 688583 有 3 条
+`review_status='verified'`、`method='manual'` 的风险证据，通篇没有数字 ——
+风险因素本就是定性表述。若坚持"必须有数字"，这些**人工核验过的**成果会被全数拒绝。
+所以这类引文走一条**更强**的口径：整串忽略空白后必须是该页原文的**连续子串**，
+且长度 ≥ 20 字（短句在整篇里到处都是，证不了出处）。
+
+> **对外的 `source_quote` 是页面原文里的连续片段**（用 `db.document_page_text` 切出来，
+> 带指标标签，如 `营业收入（元） 7,958,051,684.14 6,366,241,242.46 25.00%`），
+> 不是那份带 `|` 的转写 —— 所以任何人拿它回原文搜都能搜到。
+
+### 核验状态（可选字段）
+
+`evidence.verification_status`（**可选**，前端不校验，保持向后兼容）：
+
+| 值 | 含义 |
+| --- | --- |
+| `verified` | 库里 `review_status='verified'` 且本次原文/页码复核通过 |
+| `auto` | 本次请求已完成机械核验（页码、原文逐字、链接都对得上） |
+| `pending` | 未通过核验。**不会返回** —— 不通过的候选直接丢弃，宁可证据不足 |
+
+### 真实模型实测（2026-10-02，deepseek-flash，新库）
+
+受控冒烟：`python scripts/smoke_dynamic.py`（**不放进自动测试**，会真联网、真花钱）。
+
+| 问题 | 结果 |
+| --- | --- |
+| 思看科技三条稳定问题 | 全部 `demo-handler`，**66–76 ms**，不碰模型 |
+| 其他三家公司 × 三个金融问题（9 次） | **9/9 `dynamic-llm` 成功** |
+| 「你的员工喜欢吃水果吗？」 | 4/4 `insufficient`，四个数组全空，**0 次模型调用** |
+| 动态回答耗时 | **3.3–8.9 s**（换用补齐直链与指标的新库后，比旧库的 3.1–16.4 s 快一倍） |
+
+> 换库前后对比（同一份代码、同一组问题）：旧的库下 9 次里有 1 次模型自己判断
+> "候选证据里没有该指标数据"而拒答；新库补齐了四家公司的结构化证据与 PDF 直链，
+> 9/9 全部答出。**拒答行为本身是期望的**（`No Evidence, No Claim`），
+> 只是不该由数据缺口来触发。
+>
+> 两条路径都在自动化测试里固化：理想模型必须走通
+> （`tests_real/test_api_real_dynamic.py`），编造引用的坏模型必须被拦下
+> （同文件的 `test_dynamic_questions_never_claim_when_no_evidence`）。
+
+**真实事故（已修，值得记住）**：即使 system prompt 三次强调「只输出 JSON」，
+deepseek-flash 仍会：
+① 先写一段分析、末尾才补 JSON；② 把 `answer` 写成 `结论` / `conclusion`；
+③ 给出 prose 结论却把 `claims` 留空（连 `EV-xxx` 编号也不写）。
+早期实现只做整串 `json.loads` + 只认 `claims` 字段，于是一份**引用正确**的回答
+被整次降级成「无法回答」。现在 `dynamic_qa.parse_llm_json` 做三层确定性容错
+（围栏 → 平衡花括号扫描 → 首尾截取 + 键名归一化），
+`_coerce_answer_into_claims` 再把带数字/编号的句子机械转成 claim
+（数字还能**反向绑定**到候选证据）。这些行为都有回归测试。
+
+---
+
 ## ③ 数据库
 
 唯一数据源：**`cninfo.db`**（默认放在**仓库根目录**，见下面的路径解析）。
@@ -248,17 +356,43 @@ python scripts/check_frontend_contract.py
 | 表 | 内容 | 本后端怎么用 |
 | --- | --- | --- |
 | `docs` | 1905 条公告（14 列，含 `document_type` / `report_period` / `published_at` / `source_url` / `parse_status` / `superseded`） | 公告元数据、正文、**真实直链** |
-| `chunks` | 4941 条**按页切分**的正文（`page_number` + `content`） | **核验页码**、给 LLM 贴分页原文 |
-| `evidence` | 648 条结构化证据（含 3 条 `review_status='verified'` 的风险证据） | 只读参考；`value`/`unit` 尚不可信 |
-| `chunks_fts` | trigram 全文索引 | 备用（当前检索仍走 `LIKE`） |
-| `meta` | `fts_mode=trigram` | 能力探测 |
+| `chunks` | 2845 条**按页切分**的正文（`page_number` + `content`） | **核验页码**、给 LLM 贴分页原文 |
+| `evidence` | 503 条结构化证据（四家公司；含 **3 条 `review_status='verified'`** 与 `category='risk'`） | 动态问答的候选来源；`value`/`unit` 不可信 |
+| `chunks_fts` | 801 行全文索引（`meta.fts_mode=trigram`） | 备用（当前检索仍走参数化 `LIKE`） |
+| `meta` | `schema_version=1.0` / `fts_mode=trigram` | 能力探测 |
+
+> **四家公司的 `docs.source_url` 已 100% 补齐**（688583 312/312、600570 564/564、
+> 000066 481/481、300558 548/548），所以动态证据都能给出**文档自己的 PDF 直链**，
+> 不再需要退回到巨潮公告列表页。`tests_real` 里有一条测试专门防止它退化。
+>
+> **没有 chunks 的文档走页界标记**：1905 篇里 1905 篇都有「--- 第N页 ---」标记，
+> 所以即使某篇没有切页，`db.document_page_text` 仍能取到该页原文、照常核验。
+>
+> ⚠️ **不要直接信任 `evidence.value` / `evidence.unit`** —— 数据库同学仍在修金额与单位。
+> 出结论时以 `source_quote` 为准重新核对数字（`response_validator` 会做这件事）。
+> 同理，`evidence.content` 是自动抽取的残渣（「营业收入：214.0%」），
+> 动态证据的 `content` 由后端按已核验摘录重新拼，不使用原字段。
+
+### `evidence.metric` 取值（动态问号 → 指标映射的依据）
+
+| 类别 | metric |
+| --- | --- |
+| 收入与利润 | `revenue`、`net_profit`、`net_profit_attr`（归母）、`net_profit_deducted`（扣非）、`eps` |
+| 现金与资产 | `operating_cash_flow`、`total_assets`、`equity_attr`（归母净资产）、`debt_ratio` |
+| 经营质量 | `gross_margin`、`rd_investment`、`rd_expense`、`rd_ratio`、`accounts_receivable`、`inventory` |
+| 风险（定性、手工核验） | `risk_product_mix`、`risk_tech_edge`、`risk_downstream_demand` |
+
+> ⚠️ 「归母净利润」对应的是 **`net_profit_attr`**，不是 `net_profit`。
+> 实测 `300558` **一条 `net_profit` 都没有**，只有 `net_profit_attr` ——
+> 关键词→指标的映射顺序写反会让它问归母净利润时无据可用。
+> `dynamic_evidence.METRIC_RULES` 里每条规则的关键词顺序都按"更具体的排前面"
+> 排列（`扣非` 在 `净利润` 前、`研发投入占` 在 `营业收入` 前、`净资产` 在 `归母` 前），
+> 这些顺序都有回归测试，改动前请先看 `tests/test_api_dynamic_qa.py` 里的断言。
 
 查询一律**只读**（`mode=ro`），参数化 SQL，**每次查询都带 `company_code`**，
 默认过滤 `parse_status='ok' AND superseded=0`。
-旧版 8 列库仍能跑（`has_extended_schema()` 做能力探测，缺表缺列自动降级）。
-
-> ⚠️ **不要直接信任 `evidence.value` / `evidence.unit`** —— 数据库同学仍在修金额与单位。
-> 出结论时以 `source_quote` 为准重新核对数字（`response_validator` 会做这件事）。
+旧版 8 列库仍能跑（`has_extended_schema()` 做能力探测，缺表缺列自动降级；
+没有 `evidence` 表的库会直接返回空候选，不会抛错）。
 
 ### 路径解析（自适应）
 
@@ -384,37 +518,43 @@ python scripts/run_night_batch.py --limit 2 --days 90
 ```
 xray-backend/
 ├── main.py                  FastAPI 入口、lifespan、CORS、统一异常处理（无调度器）
-├── ask.py                   5 条路由；answer 优先级：确定性处理器 → 固定兜底
+├── ask.py                   5 条路由；决策顺序：确定性处理器 → 覆盖面外兜底 → 动态问答 → 兜底
 ├── demo_handlers.py         ★ 三条稳定 Demo 问题的确定性处理器 + 事实核验
+├── dynamic_evidence.py      ★ 动态问答的候选检索 + 原文/页码机械核验
+├── dynamic_qa.py            ★ 动态问答主流程（Prompt / JSON 解析 / 机械校验 / 组装）
 ├── verified_sources.py      ★ 已核验的权威 PDF 目录（上交所注册稿 / 半年报）
-├── response_validator.py    ★ No Evidence, No Claim 响应校验器
+├── response_validator.py    ★ No Evidence, No Claim 响应校验器（含数据库原文复核）
 ├── db.py                    ★ 唯一数据访问层（docs/chunks/evidence，只读 sqlite3）
 ├── analyzer.py              ★ 唯一 LLM 判断逻辑（prompt + 清洗 + 当日缓存）
-├── config.py                BaseSettings（DATABASE_PATH / DeepSeek / 缓存 / 日志）
+├── config.py                BaseSettings（DATABASE_PATH / DeepSeek / 动态问答开关 / 缓存 / 日志）
 ├── schemas.py               响应契约（顶层恰好 6 键，Evidence 必须带原文引用）
 ├── llm_client.py            DeepSeek 客户端（OpenAI SDK）+ 失败降级文案
 ├── matcher.py               中文问题归一与相似度匹配
 ├── logging_config.py        logging + RotatingFileHandler
 ├── scripts/
 │   ├── run_night_batch.py   ★ 批处理入口（--demo / --dry-run，写两份报告）
-│   ├── make_samples.py      ★ 生成四个前端联调用响应样例（真的调接口）
+│   ├── make_samples.py      ★ 生成前端联调用响应样例（真的调接口；--dynamic 生成动态样例）
+│   ├── smoke_dynamic.py     ★ 真实模型受控冒烟（四家公司 × 通用问题，会联网）
 │   ├── check_frontend_contract.py  把 api.ts 校验器译成 Python 逐字段判定
 │   ├── check_real_pipeline.py      真实库全链路自检
 │   ├── inspect_db.py        只读打印 cninfo.db 表结构
 │   ├── selfcheck.py         结构自检（无需第三方依赖）
 │   ├── check_db.py          db.py 行为自检（真跑真实 sqlite）
 │   └── check_batch.py       analyzer / 批处理行为自检
-├── samples/                 ★ 四个响应样例（前端联调直接用）
-├── tests/                   合成库（3 家公司、8 列）—— 行为测试
-│   ├── conftest.py          测试库 + fixtures（LLM 已 mock）
+├── samples/                 ★ 响应样例（4 个稳定 + 12 个动态，前端联调直接用）
+├── tests/                   合成库（3 家公司、8 列 + 一份扩展库）—— 行为测试
+│   ├── conftest.py          测试库 + fixtures（LLM 已 mock；含 4 公司扩展库构造）
 │   ├── helpers.py           契约断言工具
 │   ├── test_api_db.py       db.py 的 pytest 用例
 │   ├── test_api_contract.py 接口契约与缓存行为
-│   └── test_api_batch.py    analyzer 与批处理
-├── tests_real/              真实 cninfo.db —— 三条 Demo 问题的端到端验收
+│   ├── test_api_batch.py    analyzer 与批处理
+│   ├── test_api_dynamic_qa.py    动态问答单元测试（解析/校验/核验，不碰库）
+│   └── test_api_dynamic.py       动态问答接口与检索隔离（扩展合成库）
+├── tests_real/              真实 cninfo.db —— 端到端验收
 │   ├── conftest.py          指向真实库（与 tests/ 环境刻意隔离）
 │   ├── pytest.ini           独立 basetemp，避免沙箱 ACL 冲突
-│   └── test_api_real_demo.py  10 条验收 + 校验器 + 意图判定 + 来源/页码回归
+│   ├── test_api_real_demo.py     10 条稳定 Demo 验收 + 校验器 + 来源/页码回归
+│   └── test_api_real_dynamic.py  ★ 四家公司动态问答验收（检索隔离/引文可核/URL 裸地址）
 ├── deploy/crontab.xray      生产环境 cron 示例
 ├── _unused/                 旧链路归档（逐文件说明废弃原因见其 README）
 │   └── README.md
@@ -460,22 +600,38 @@ python -m pytest tests_real -q -k pdf
 重新生成前端联调用的响应样例：
 
 ```bash
-python scripts/make_samples.py          # 写到 samples/
+python scripts/make_samples.py                # 4 个稳定样例
+python scripts/make_samples.py --dynamic      # 额外 12 个动态样例（四家公司 × 3 问）
 ```
 
 样例**不是手写的**：脚本真的调用一次应用（TestClient 走完整路由 + 校验 + 兜底），
 把响应原样落盘，所以样例与线上行为不会漂移。`tests_real` 里有一条用例专门断言
 「磁盘上的样例 == 当前实现」，防止改完代码忘了重跑脚本。
 
+`--dynamic` 用一个**确定性假 LLM**（只看候选证据就能写出合法 JSON）：
+样例要能复现、能进版本库、不能让评审看到随机内容。真实模型的表现见 ②-补。
+
+真实模型**受控冒烟**（会联网、会花钱，不进自动测试）：
+
+```bash
+# 需要 .env 里配好 DEEPSEEK_API_KEY；四家公司 × 通用问题，打印来源/耗时/成功率
+python scripts/smoke_dynamic.py
+```
+
+### 测试文件对照
 
 | 文件 | 覆盖 |
 | --- | --- |
 | `test_api_db.py` | 三个查询函数；时间窗口/limit/正文截断；`created_at` 六种格式 + 坏日期行**必须保留**；`LIKE` 通配符转义；**只读**；缺库/空库/缺表/缺列四种情况都报明确错误 |
 | `test_api_contract.py` | 路径无 `/api` 前缀；顶层 6 字段及顺序；high 风险公司出 findings+带引用的证据；**「无足够信息」时数组允许为空**；answer 非空且有最新公告；`.SH` 后缀归一；缓存命中；过期缓存仍可用；统一错误结构；profile/signals/health/search/admin |
 | `test_api_batch.py` | prompt 硬约束；JSON 解析容错（代码块/前后废话/非 JSON）；清洗规则（丢弃悬空引用、非法 type、无 quote 证据、孤立证据、空口定罪降级）；**当日缓存不重复调用 LLM**；隔日失效；LLM 失败降级；批量隔离失败；`--dry-run` 不写文件；`--demo` 限量；报告六个必需字段 |
+| `test_api_dynamic_qa.py` | JSON 解析三层容错（含 `结论`/`conclusion` 键名归一、字符串里的 `}`）；悬空 id / 跨响应 id 被丢弃；无证据条目丢弃后整次兜底；charts 恒为 `[]`；引文核验（数字缺失/顺序颠倒/跨度过宽/无数字 全部拒绝）；label 提取；prose→claim 机械转换与**反向数字绑定**；拒答句不转换；无 Key/超时/非法 JSON/空内容降级；水果问题不调用模型 |
+| `test_api_dynamic.py` | 四家公司检索严格隔离（候选文档必须属于本公司）；页码越界/页码缺失/伪造引文三条脏数据被拦下；返回引文必须是所引页面的连续原文；候选编号连续且不超预算；覆盖面外问题在**检索层**即断掉；动态回答过统一校验出口；**思看科技稳定三问不被动态链路抢走**；非思看公司拿不到思看事实；保命开关 |
+| `tests_real/test_api_real_dynamic.py` | 真实库上的四家公司：候选引文能在所引页核到；页码不越界；URL 是裸地址；核验状态只有 verified/auto；动态回答端到端合法且经数据库侧复核；水果问题四个数组全空且 0 次模型调用；稳定三问不退化；「坏模型」编造引用被拦下 |
 
-测试全程 `LLM_FAKE=true`（或直接 monkeypatch `analyzer.generate_answer`），**不发起任何外部请求**；
-数据库指向临时文件，不碰真实的 `data/cninfo.db`。
+测试全程 `LLM_FAKE=true`（或直接 monkeypatch `analyzer.generate_answer` /
+`dynamic_qa.generate_answer`），**不发起任何外部请求**；
+数据库指向临时文件，不碰真实的 `cninfo.db`。
 
 > `pytest.ini` 里把 `basetemp` 指到了工作区内 —— 受限环境下系统临时目录无法创建 SQLite 文件。
 
@@ -530,15 +686,50 @@ python scripts/check_batch.py    # analyzer + 批处理
 
 四条问题的调用示例见 ①。
 
+### 前端需要注意的差异（本轮新增）
+
+| 项 | 说明 |
+| --- | --- |
+| `evidence.verification_status` | **新增可选字段**（`verified`/`auto`/`pending`）。不返回时前端按未标注处理；`pending` 永远不会出现。加可选字段是为了不破坏现有前端契约 |
+| 响应头 `X-XRay-Cache` | 新增取值 `dynamic-llm`（动态链路作答）与 `insufficient`（固定兜底）。`demo-handler` 仍是思看科技三条稳定问题 |
+| 动态回答的 `charts` | **固定 `[]`**（P0 不生成图表）。前端的图表区域需要能容忍空数组 |
+| `suggested_questions` | 思看科技仍是原来四条、顺序不变；**其他三家公司用产品约定的通用四问**（营收/归母净利润、经营现金流、盈利趋势、员工水果） |
+| `evidence.category` | 库里 `category='risk'` 的证据在响应里是 **`business`**（前端只认三个值，见「已知限制」第 7 条） |
+| 非思看公司的风险问题 | 目前返回**固定证据不足**（库里没有它们的风险类证据），不是报错、也不是拿财务数据充数 |
+
 ### 已知限制 / 未完成事项
 
 1. **注册稿 PDF 不在版本库**（13 MB）。页码核验用例需要手工下载后才跑，
    否则 skip；库那份是上市稿，**不能**替注册稿作证。
 2. **`cninfo.db` 不入库**（`*.db` 已 gitignore），需自行放置到仓库根目录。
+   仓库根的 `cninfo.db.bak-20261002` 是换库前的备份（同样不入库）。
 3. 半年报页码虽与库完全一致，但 SSE 该 URL 对脚本化下载返回 JS 反爬页
    （浏览器/正常客户端可打开）；核验时用的是与之同版的库内文档 + 人工确认。
-4. Nightly Pipeline / Snapshot / 维护模式 / 任意问题 LLM 分析均**未接入当前产品闭环**，
+4. Nightly Pipeline / Snapshot / 维护模式均**未接入当前产品闭环**，
    属目标架构，不要当成已完成能力。
+5. **动态问答的数据侧限制**（都是数据问题，不是代码问题）：
+   * `evidence.value` / `unit` / `content` 是自动抽取的残渣
+     （如「营业收入：214.0%」「一、营业收入：187.0元」），**不可信、不直接使用**；
+     动态证据的 `content` 由后端按已核验摘录重新拼；
+   * `evidence.period` 有误标（2025 半年报的行里混着 `2026FY`），
+     所以报告期以 `docs.report_period` / 文档标题为准；
+   * **503 条 evidence 里只有 3 条是人工核验的**（688583 的风险因素），
+     其余 500 条都是 `review_status='auto'`。动态问答对它们做的是
+     **机械核验**（页码 + 原文逐字 + 链接），不是人工核验 ——
+     `verification_status` 如实区分 `verified` / `auto`；
+   * 机械核验会拒掉 18/503 条（16 条数字顺序与页面不一致、2 条跨度超限），
+     这是**保守**的取舍：宁可少给证据，也不给一条无法回溯的引用；
+   * 单条引文由表格转写而来，上下文有时很短；
+     P0 只覆盖**结构化财务问题**，非结构化的风险类问题未接 `chunks` 全文检索。
+6. **风险类问题目前一律诚实拒答**（除思看科技的稳定风险问题外）。
+   库里只有 688583 有 3 条风险类证据，其他三家公司没有 ——
+   拿营收/净利润去"回答"风险问题是最坏的一种答非所问，所以宁可说证据不足。
+   要支持风险问答，需要数据库侧为四家公司补齐风险类证据（或接 `chunks` 全文检索）。
+7. `category='risk'` 的证据在响应里被归一成 **`business`**：
+   前端 `api.ts` 的 `isEvidence()` 只接受 financial/business/company，
+   而任务书明确要求不得修改前端。这是**已知的契约妥协**，不是数据丢失。
+8. 动态回答 P0 **固定不生成图表**（`charts: []`）。前端对动态回答的展示
+   目前不需要图表；要加图表需先定义"哪个数字画哪根线"的证据规则。
 
 ---
 

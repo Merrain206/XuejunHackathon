@@ -44,6 +44,9 @@ ALLOWED_CHART_TYPES = ("line",)
 #: 响应体顶层必须恰好是这 6 个键
 TOP_LEVEL_KEYS = ("answer", "claims", "signals", "charts", "evidence", "suggested_questions")
 
+#: 证据核验状态的合法取值（可选字段；出现时必须是这三个之一）
+ALLOWED_VERIFICATION_STATUS = ("verified", "auto", "pending")
+
 _HTTP_RE = re.compile(r"^https?://", re.I)
 #: 带小数点的比率/金额（如 17.70、78.19、-32.59）
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -228,6 +231,28 @@ def validate_response(payload: Any, *, strict_numbers: bool = True) -> Validatio
         if not _non_empty_str(url) or not _HTTP_RE.match(str(url).strip()):
             # 规则 7：URL 缺失 → 不得返回该证据
             result.add("E-URL", f"evidence {ev_id} 的 source_url 必须是合法 http(s) URL，收到 {url!r}")
+        elif "#" in str(url):
+            # 前后端分工：后端只给**裸** PDF 地址，页码通过 source_page 独立返回，
+            # fragment 由前端统一追加。两边都追加会形成 `#page=N#page=N`，跳页失效。
+            result.add(
+                "E-URL-FRAGMENT",
+                f"evidence {ev_id} 的 source_url 不得带 fragment（页码由 source_page 独立返回）：{url!r}",
+            )
+
+        status = item.get("verification_status")
+        if status is not None and status not in ALLOWED_VERIFICATION_STATUS:
+            result.add(
+                "E-VERIFY-STATUS",
+                f"evidence {ev_id} 的 verification_status={status!r} "
+                f"不在 {ALLOWED_VERIFICATION_STATUS}",
+            )
+        elif status == "pending":
+            # 未通过核验的证据不该出现在响应里（dynamic_evidence 会直接丢弃它们）。
+            # 这里记成警告而不是硬失败：字段是可选的，且历史样例可能带它。
+            result.warn(
+                "W-VERIFY-PENDING",
+                f"evidence {ev_id} 标注为 pending（未通过核验），不应支撑任何结论",
+            )
 
     # ---- 规则 4：evidence id 不能重复 ----
     if len(evidence_ids) != len(set(evidence_ids)):
@@ -369,6 +394,124 @@ def validate_response(payload: Any, *, strict_numbers: bool = True) -> Validatio
     return result
 
 
+def verify_evidence_against_source(
+    payload: Any,
+    *,
+    stock_code: str = "",
+    documents: dict[int, dict[str, Any]] | None = None,
+    page_texts: dict[tuple[int, int], str] | None = None,
+) -> ValidationResult:
+    """把响应里的每条证据**回到数据库原文**核验（任务书第 3 节 4~6 条）。
+
+    与 `validate_response` 的分工：
+      * `validate_response` 只看**结构**（字段齐不齐、URL 合法不合法、引用有无悬空），
+        它不需要数据库，任何环境都能跑；
+      * 本函数看**事实**（引文是否真在所引页面上、页码是否越界、
+        document_id 是否真属于这家公司）。
+
+    这也是「跨公司引用」的唯一有效拦截点：`document_id` 必须属于 `stock_code`，
+    否则一家公司的回答里就可能出现另一家公司的公告 —— 那是最严重的事实污染。
+
+    核验口径（与 `dynamic_evidence` 一致，两条路径不能各写一套）：
+      1. `source_page` 是正整数，且不超过该文档的页数；
+      2. `source_quote` 里的**每个有意义数字**在所引页面上逐字出现、顺序一致、
+         首末跨度不超过 `DYNAMIC_MAX_QUOTE_SPAN`；
+      3. `source_url` 是 http(s) 且不带 fragment。
+
+    :param documents: `{document_id: {...}}`（含 company_code / page_count）。
+        不传时自动查库。
+    :param page_texts: `{(document_id, page): 该页原文}`。不传时自动查库。
+    :returns: `ValidationResult`；`ok=False` 表示有证据不可回溯。
+    """
+    from config import settings as _settings
+
+    result = ValidationResult()
+    if hasattr(payload, "model_dump"):
+        payload = payload.model_dump(mode="json")
+    if not isinstance(payload, dict):
+        result.add("E-STRUCT", "响应必须是对象")
+        return result
+
+    evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
+    if not evidence:
+        return result
+
+    def _document_id(item: dict[str, Any]) -> int | None:
+        try:
+            return int(str(item.get("document_id")))
+        except (TypeError, ValueError):
+            return None
+
+    if documents is None or page_texts is None:
+        import db as _db
+
+        ids = [d for d in (_document_id(e) for e in evidence) if d is not None]
+        try:
+            documents = documents if documents is not None else _db.document_pages_meta(ids)
+        except (_db.DatabaseNotReadyError, ValueError) as exc:
+            result.add("E-SOURCE", f"无法读取文档元信息，证据无法核验：{exc}")
+            return result
+        if page_texts is None:
+            page_texts = {}
+            for item in evidence:
+                document_id = _document_id(item)
+                page = item.get("source_page")
+                if document_id is None or not isinstance(page, int):
+                    continue
+                key = (document_id, page)
+                if key in page_texts:
+                    continue
+                try:
+                    page_texts[key] = _db.document_page_text(document_id, page)
+                except (_db.DatabaseNotReadyError, ValueError):
+                    page_texts[key] = ""
+
+    # 延迟导入：避免模块级循环依赖（dynamic_evidence 会 import config/db）
+    from dynamic_evidence import verify_quote_on_page
+
+    for item in evidence:
+        ev_id = str(item.get("id") or "?")
+        document_id = _document_id(item)
+        if document_id is None:
+            result.add("E-SOURCE-DOC", f"evidence {ev_id} 的 document_id 不是整数")
+            continue
+
+        meta = documents.get(document_id)
+        if meta is None:
+            result.add(
+                "E-SOURCE-DOC",
+                f"evidence {ev_id} 引用的 document_id={document_id} 在库里不存在",
+            )
+            continue
+
+        owner = str(meta.get("company_code") or "")
+        if stock_code and owner and owner != stock_code:
+            # ★ 跨公司污染：这条证据属于别人家的公告
+            result.add(
+                "E-CROSS-COMPANY",
+                f"evidence {ev_id} 引用了公司 {owner} 的公告，而本次提问是 {stock_code}",
+            )
+            continue
+
+        page = item.get("source_page")
+        total_pages = int(meta.get("page_count") or 0)
+        if total_pages and isinstance(page, int) and page > total_pages:
+            result.add(
+                "E-PAGE-RANGE",
+                f"evidence {ev_id} 的 source_page={page} 超出文档 {document_id} 的 {total_pages} 页",
+            )
+            continue
+
+        text = page_texts.get((document_id, page), "") if isinstance(page, int) else ""
+        ok, reason, _tokens = verify_quote_on_page(
+            str(item.get("source_quote") or ""), text, max_span=_settings.DYNAMIC_MAX_QUOTE_SPAN
+        )
+        if not ok:
+            result.add("E-QUOTE-UNVERIFIED", f"evidence {ev_id}：{reason}")
+
+    return result
+
+
 def assert_valid(payload: Any, *, strict_numbers: bool = True) -> dict[str, Any]:
     """校验并在失败时抛 ValueError；成功返回响应 dict。"""
     if hasattr(payload, "model_dump"):
@@ -385,9 +528,11 @@ __all__ = [
     "ALLOWED_CHART_TYPES",
     "ALLOWED_SEVERITIES",
     "ALLOWED_SIGNAL_TYPES",
+    "ALLOWED_VERIFICATION_STATUS",
     "INSUFFICIENT_ANSWER",
     "TOP_LEVEL_KEYS",
     "ValidationResult",
     "assert_valid",
     "validate_response",
+    "verify_evidence_against_source",
 ]

@@ -410,3 +410,310 @@ def analyzed(fake_llm, client):
     for code in ("688583", "000001", "600036"):
         analyze_company(code, force=True)
     return client
+
+
+# ---------------------------------------------------------------------------
+# 扩展合成库：给「动态 Evidence-first 问答」用的四家公司 + evidence/chunks
+#
+# 为什么单独造一份库、而不是往 DOCS_ROWS 里加行：
+#   上面那份 8 列小库是 db.py「方案 B」的行为测试基线（公告条数、日期窗口等
+#   断言都写死了 5 / 3 / 3 条）。往里插数据会一次性打破一堆无关断言。
+#   所以动态问答用**独立的一份库**（同一目录，另一个文件名），各测各的。
+#
+# 设计要点（刻意保留真实库里的"脏"特征，让测试真的在测核验逻辑）：
+#   * 引文是**表格转写**（带 `|`），不是页面原文 —— 真实库就是这样，
+#     直接整串子串匹配会 100% 失败（见 dynamic_evidence 的注释）；
+#   * 逐条引文都能在所引页面上逐字核到数字，顺序也一致；
+#   * 刻意塞三条**必须被拒绝**的脏数据：
+#       - 页码越界、页码缺失、引文里的数字在该页不存在。
+# ---------------------------------------------------------------------------
+
+EXT_DB_FILE = TEST_DIR / "cninfo_ext.db"
+#: 动态问答测试用的四家公司（与产品约定的名单一致）
+DYNAMIC_CODES = ("688583", "600570", "000066", "300558")
+
+#: 每家公司的文档：(file_name, page_count, {页码: 该页原文}, report_period)
+_EXT_DOCS: dict[str, list[tuple[str, int, dict[int, str], str]]] = {}
+#: 每家公司的证据：(document_index, metric, period, value, unit, page, source_quote, review_status)
+_EXT_EVIDENCE: dict[str, list[tuple]] = {}
+#: 刻意注入的脏数据：只属于 600570，用来验证"拦得住"
+_DIRTY_EVIDENCE: list[tuple] = []
+
+
+def _page(lines: list[str]) -> str:
+    return "\n".join(lines)
+
+
+def _build_extended_fixtures() -> None:
+    """构造四家公司的文档/证据（模块导入时执行一次）。"""
+    for code in DYNAMIC_CODES:
+        docs: list[tuple[str, int, dict[int, str], str]] = []
+        rows: list[tuple] = []
+
+        # ---- 文档 0：2025 年半年度报告摘要（4 页）----
+        rev_now, rev_prev, rev_pct = 176848509.44, 150248052.96, "17.70"
+        np_now, np_prev, np_pct = 54007712.64, 52918429.73, "2.06"
+        ocf_now, ocf_prev, ocf_pct = 31159083.37, 46225989.56, "-32.59"
+        page1 = _page(
+            [
+                f"证券代码：{code} 证券简称：某公司",
+                "2025 年半年度报告摘要",
+                "2、主要会计数据和财务指标",
+            ]
+        )
+        page2 = _page(
+            [
+                "本报告期 上年同期 本报告期比上年同期增减",
+                f"营业收入（元） {rev_now:,.2f} {rev_prev:,.2f} {rev_pct}%",
+                f"归属于上市公司股东的净利润（元） {np_now:,.2f} {np_prev:,.2f} {np_pct}%",
+                f"经营活动产生的现金流量净额（元） {ocf_now:,.2f} {ocf_prev:,.2f} {ocf_pct}%",
+                f"基本每股收益（元/股） 0.79 0.78 1.28%",
+                f"总资产（元） 1234567890.12 1111111111.11 11.11%",
+            ]
+        )
+        page3 = _page(["3、公司股东数量及持股情况", "报告期末普通股股东总数 10,000 户"])
+        page4 = _page(["4、控股股东或实际控制人变更情况", "公司报告期控股股东未发生变更。"])
+        docs.append(
+            (f"20250828_{code}2025年半年度报告摘要.pdf", 4, {1: page1, 2: page2, 3: page3, 4: page4}, "2025FY")
+        )
+        rows.extend(
+            [
+                (0, "revenue", "2025FY", rev_now, "元", 2,
+                 f"营业收入（元） | {rev_now:,.2f} | {rev_prev:,.2f} | {rev_pct}", "auto"),
+                (0, "net_profit", "2025FY", np_now, "元", 2,
+                 f"归属于上市公司股东的净利润（元） | {np_now:,.2f} | {np_prev:,.2f} | {np_pct}", "auto"),
+                (0, "operating_cash_flow", "2025FY", ocf_now, "元", 2,
+                 f"经营活动产生的现金流量净额（元） | {ocf_now:,.2f} | {ocf_prev:,.2f} | {ocf_pct}", "auto"),
+                (0, "eps", "2025FY", 0.79, "元/股", 2, "基本每股收益（元/股） | 0.79 | 0.78 | 1.28", "auto"),
+                (0, "total_assets", "2025FY", 1234567890.12, "元", 2,
+                 "总资产（元） | 1,234,567,890.12 | 1,111,111,111.11 | 11.11", "auto"),
+            ]
+        )
+
+        # ---- 文档 1：2024 年年度报告（6 页，带 chunks）----
+        rev24, rev23, rev24_pct = 210000000.00, 180000000.00, "16.67"
+        np24, np23, np24_pct = 66000000.00, 61000000.00, "8.20"
+        ocf24, ocf23, ocf24_pct = 48000000.00, 55000000.00, "-12.73"
+        y1 = _page([f"证券代码：{code}", "2024 年年度报告", "第一节 重要提示、目录和释义"])
+        y2 = _page(["第二节 公司简介和主要财务指标"])
+        y3 = _page(
+            [
+                "本报告期 上年同期 本报告期比上年同期增减",
+                f"营业收入（元） {rev24:,.2f} {rev23:,.2f} {rev24_pct}%",
+                f"归属于上市公司股东的净利润（元） {np24:,.2f} {np23:,.2f} {np24_pct}%",
+                f"经营活动产生的现金流量净额（元） {ocf24:,.2f} {ocf23:,.2f} {ocf24_pct}%",
+                f"基本每股收益（元/股） 0.98 0.91 7.69%",
+            ]
+        )
+        y4 = _page(["第三节 管理层讨论与分析", "报告期内公司主营业务未发生重大变化。"])
+        y5 = _page(["第四节 公司治理", "公司治理结构完善。"])
+        y6 = _page(["第五节 环境和社会责任", "公司积极履行社会责任。"])
+        docs.append(
+            (
+                f"20250428_{code}2024年年度报告.pdf",
+                6,
+                {1: y1, 2: y2, 3: y3, 4: y4, 5: y5, 6: y6},
+                "2024FY",
+            )
+        )
+        rows.extend(
+            [
+                (1, "revenue", "2024FY", rev24, "元", 3,
+                 f"营业收入（元） | {rev24:,.2f} | {rev23:,.2f} | {rev24_pct}", "auto"),
+                (1, "net_profit", "2024FY", np24, "元", 3,
+                 f"归属于上市公司股东的净利润（元） | {np24:,.2f} | {np23:,.2f} | {np24_pct}", "auto"),
+                (1, "operating_cash_flow", "2024FY", ocf24, "元", 3,
+                 f"经营活动产生的现金流量净额（元） | {ocf24:,.2f} | {ocf23:,.2f} | {ocf24_pct}", "auto"),
+                # 只有 2023 年那一列的证据：用来验证"报告期不同 → 候选不同"
+                (1, "revenue", "2023FY", rev23, "元", 3,
+                 f"营业收入（元） | {rev23:,.2f} | 150,000,000.00 | 20.00", "auto"),
+            ]
+        )
+
+        # ---- 文档 2：2024 年半年度报告（3 页，无 chunks，走页界标记）----
+        m1 = _page(["2024 年半年度报告", "一、重要提示"])
+        m2 = _page(
+            [
+                "主要会计数据",
+                f"营业收入（元） {110000000.00:,.2f} {95000000.00:,.2f} 15.79%",
+                f"归属于上市公司股东的净利润（元） {33000000.00:,.2f} {29000000.00:,.2f} 13.79%",
+            ]
+        )
+        m3 = _page(["二、公司基本情况", "报告期内公司经营情况稳定。"])
+        docs.append(
+            (f"20240830_{code}2024年半年度报告.pdf", 3, {1: m1, 2: m2, 3: m3}, "2024H1")
+        )
+        rows.extend(
+            [
+                (2, "revenue", "2024H1", 110000000.00, "元", 2,
+                 "营业收入（元） | 110,000,000.00 | 95,000,000.00 | 15.79", "auto"),
+                (2, "net_profit", "2024H1", 33000000.00, "元", 2,
+                 "归属于上市公司股东的净利润（元） | 33,000,000.00 | 29,000,000.00 | 13.79", "auto"),
+            ]
+        )
+
+        _EXT_DOCS[code] = docs
+        _EXT_EVIDENCE[code] = rows
+
+    # ---- 脏数据：只挂在 600570 上，三条都必须被拦下 ----
+    _DIRTY_EVIDENCE.extend(
+        [
+            # a) 页码越界（文档只有 4 页，却声称第 9 页）
+            (0, "revenue", "2025FY", 1.0, "元", 9, "营业收入（元） | 1.00 | 2.00", "auto"),
+            # b) 页码缺失（NULL）
+            (0, "net_profit", "2025FY", 1.0, "元", None,
+             "归属于上市公司股东的净利润（元） | 1.00 | 2.00", "auto"),
+            # c) 引文里的数字在该页上根本不存在（伪造引用）
+            (1, "operating_cash_flow", "2024FY", 1.0, "元", 3,
+             "经营活动产生的现金流量净额（元） | 999,999,999.99 | 888,888,888.88", "auto"),
+        ]
+    )
+
+
+_build_extended_fixtures()
+
+
+def build_extended_db(path: Path) -> None:
+    """造一份带 docs/chunks/evidence 的扩展合成库。
+
+    ⚠️ **必须用全新的路径**：Windows 上已打开的 SQLite 文件无法 unlink
+       （会报 WinError 32）。所以每次测试用带 uuid 的独立文件名，
+       而不是反复覆盖同一个 `cninfo_ext.db`。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    con.execute(
+        """CREATE TABLE docs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_code TEXT, file_name TEXT, rel_path TEXT, page_count INTEGER,
+            text_content TEXT, tables_json TEXT, created_at TEXT,
+            document_type TEXT, published_at TEXT, report_period TEXT,
+            source_url TEXT, parse_status TEXT DEFAULT 'ok', superseded INTEGER DEFAULT 0)"""
+    )
+    con.execute(
+        """CREATE TABLE chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL, company_code TEXT NOT NULL,
+            page_number INTEGER, chunk_index INTEGER, content TEXT NOT NULL,
+            content_len INTEGER)"""
+    )
+    con.execute(
+        """CREATE TABLE evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_code TEXT NOT NULL, document_id INTEGER NOT NULL,
+            category TEXT, metric TEXT, period TEXT, value REAL, unit TEXT,
+            content TEXT, source_page INTEGER, source_quote TEXT,
+            method TEXT, review_status TEXT DEFAULT 'auto', created_at TEXT)"""
+    )
+
+    for code, docs in _EXT_DOCS.items():
+        doc_ids: list[int] = []
+        for file_name, page_count, pages, report_period in docs:
+            # text_content 里放「--- 第N页 ---」页界标记（招股书那种没有 chunks 的文档）
+            body = "".join(f"--- 第{page}页 ---\n{text}\n" for page, text in sorted(pages.items()))
+            is_half_year = "半年度报告" in file_name and "摘要" not in file_name
+            source_url = f"http://static.cninfo.com.cn/finalpage/2025-08-28/{code}0001.PDF"
+            cursor = con.execute(
+                "INSERT INTO docs (company_code, file_name, rel_path, page_count, text_content,"
+                " tables_json, created_at, document_type, report_period, source_url,"
+                " parse_status, superseded) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    code,
+                    file_name,
+                    f"{code}/{file_name}",
+                    page_count,
+                    body,
+                    None,
+                    "2026-10-02 01:00:00",
+                    "annual_report" if "年度报告" in file_name else "q1_report",
+                    report_period,
+                    source_url,
+                    "ok",
+                    0,
+                ),
+            )
+            document_id = int(cursor.lastrowid)
+            doc_ids.append(document_id)
+            # 半年报有 chunks（模拟真实库：年报/半年报切了页，招股书没切）
+            if "半年度报告" in file_name and "摘要" not in file_name:
+                continue
+            for page, text in sorted(pages.items()):
+                con.execute(
+                    "INSERT INTO chunks (document_id, company_code, page_number, chunk_index,"
+                    " content, content_len) VALUES (?,?,?,?,?,?)",
+                    (document_id, code, page, 0, text, len(text)),
+                )
+
+        for row in _EXT_EVIDENCE[code]:
+            doc_index, metric, period, value, unit, page, quote, review = row
+            con.execute(
+                "INSERT INTO evidence (company_code, document_id, category, metric, period,"
+                " value, unit, content, source_page, source_quote, method, review_status)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    code,
+                    doc_ids[doc_index],
+                    "financial",
+                    metric,
+                    period,
+                    value,
+                    unit,
+                    f"{metric} {period} 摘要",
+                    page,
+                    quote,
+                    "rule",
+                    review,
+                ),
+            )
+
+    for doc_index, metric, period, value, unit, page, quote, review in _DIRTY_EVIDENCE:
+        doc_ids = [r["id"] for r in con.execute(
+            "SELECT id FROM docs WHERE company_code = ? ORDER BY id", ("600570",)
+        )]
+        con.execute(
+            "INSERT INTO evidence (company_code, document_id, category, metric, period, value,"
+            " unit, content, source_page, source_quote, method, review_status)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "600570",
+                doc_ids[doc_index],
+                "financial",
+                metric,
+                period,
+                value,
+                unit,
+                f"{metric} {period} 脏数据",
+                page,
+                quote,
+                "rule",
+                review,
+            ),
+        )
+    con.commit()
+    con.close()
+
+
+@pytest.fixture()
+def extended_db(monkeypatch):
+    """把 settings 指向扩展合成库（四家公司 + evidence），用完自动还原。
+
+    ⚠️ 必须同时改 `DATABASE_PATH`：它在 config.Settings 里的优先级高于 `DB_PATH`
+        （`_resolve_database_path_alias`），只改后者会被前者盖住，
+        测试就会跑去连上面那份 8 列小库，动态链路永远是"没有 evidence 表"。
+    ⚠️ 每次用**新的文件名**：Windows 上已打开过的库文件无法删除/覆盖。
+    """
+    import uuid
+
+    path = TEST_DIR / f"cninfo_ext_{uuid.uuid4().hex[:10]}.db"
+    build_extended_db(path)
+    from config import settings
+
+    for name in ("DB_PATH", "DATABASE_PATH"):
+        monkeypatch.setattr(settings, name, str(path), raising=False)
+    yield path
+    # 清理尽力而为：文件可能仍被连接占用（Windows），失败不影响测试结果
+    try:
+        path.unlink()
+    except OSError:
+        pass

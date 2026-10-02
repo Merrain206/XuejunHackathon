@@ -120,6 +120,38 @@ class Settings(BaseSettings):
     CHARTS_ENABLED: bool = True
     CHARTS_MAX: int = 4
 
+    # ---------------- 动态 Evidence-first 问答 ----------------
+    #: 总开关：false 时除思看科技三条稳定问题外，其余问题一律走固定证据不足。
+    #: 动态链路不稳定时的**保命开关** —— 关闭它绝不会影响稳定三问。
+    DYNAMIC_QA_ENABLED: bool = True
+    #: 动态回答是否允许出现图表。P0 固定 false（任务书：第一版不生成图表）。
+    DYNAMIC_CHARTS_ENABLED: bool = False
+    #: 给模型的候选证据条数（任务书要求 6~15 条，不能把整库塞进 Prompt）
+    DYNAMIC_MAX_CANDIDATES: int = 15
+    #: 单份文档最多贡献几条候选
+    DYNAMIC_MAX_PER_DOCUMENT: int = 6
+    #: 引文首末数字在页面上的最大跨度（忽略空白后的字符数）。
+    #: 超过它说明这些数字在原文里不属于同一段，不能拼成一条「原文摘录」。
+    DYNAMIC_MAX_QUOTE_SPAN: int = 200
+    #: 动态回答里允许引用的证据条数上限（防止模型把候选全抄一遍）
+    DYNAMIC_MAX_EVIDENCE: int = 6
+    #: 动态回答的 claim / signal 条数上限
+    DYNAMIC_MAX_CLAIMS: int = 5
+    DYNAMIC_MAX_SIGNALS: int = 3
+
+    #: 除思看科技外，允许动态问答的公司（产品负责人已确认的四家）。
+    #: 不在这份名单里的公司仍可提问，但只走「证据不足」兜底，不会跨公司取数。
+    SUPPORTED_COMPANY_CODES: tuple[str, ...] = ("688583", "600570", "000066", "300558")
+
+    #: 四家公司通用的推荐问题（任务书第 5 节，顺序固定）。
+    #: ⚠️ 思看科技仍用它自己那四条（DEFAULT_QUESTIONS），不由模型自由生成。
+    DYNAMIC_QUESTIONS: tuple[str, ...] = (
+        "最近营业收入和归母净利润表现如何？",
+        "经营现金流表现如何？",
+        "近几个报告期的盈利趋势是什么？",
+        "你的员工喜欢吃水果吗？",
+    )
+
     # ---------------- 查询链路 ----------------
     ASK_HIT_BUDGET_MS: int = 100
     MATCH_SIMILARITY_THRESHOLD: float = 0.8
@@ -211,6 +243,28 @@ class Settings(BaseSettings):
         if value < 1:
             raise ValueError(f"必须是正整数，收到 {value}")
         return value
+
+    @field_validator(
+        "DYNAMIC_MAX_CANDIDATES",
+        "DYNAMIC_MAX_PER_DOCUMENT",
+        "DYNAMIC_MAX_QUOTE_SPAN",
+        "DYNAMIC_MAX_EVIDENCE",
+        "DYNAMIC_MAX_CLAIMS",
+        "DYNAMIC_MAX_SIGNALS",
+    )
+    @classmethod
+    def _check_dynamic_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(f"动态问答的参数必须是正整数，收到 {value}")
+        return value
+
+    @field_validator("DYNAMIC_QUESTIONS", "SUPPORTED_COMPANY_CODES")
+    @classmethod
+    def _check_dynamic_items(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(v.strip() for v in value if v and v.strip())
+        if not cleaned:
+            raise ValueError("不能为空")
+        return cleaned
 
     @field_validator("DEFAULT_QUESTIONS")
     @classmethod

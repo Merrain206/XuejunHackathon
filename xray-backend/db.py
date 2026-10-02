@@ -30,7 +30,7 @@ import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from config import settings
 
@@ -833,6 +833,130 @@ def find_pages(document_id: int, needle: str, *, limit: int = 20) -> list[int]:
     return [int(r["page_number"]) for r in rows]
 
 
+def document_pages_meta(document_ids: Sequence[int] | None = None) -> dict[int, dict[str, Any]]:
+    """批量取文档元信息：`{document_id: {...}}`。
+
+    给动态问答用 —— 一次请求要核对 6~15 条候选证据，如果每条都单独开一次
+    连接去查文档，几十毫秒的连接开销会白白叠上去。
+
+    :param document_ids: 只取这些文档；None = 全部（真实库里有几千条，
+            因此内部会强制用 `company_code` 之外的主键集合收窄，见调用方）
+    """
+    ids = [int(i) for i in (document_ids or [])]
+    out: dict[int, dict[str, Any]] = {}
+    if not ids:
+        return out
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        cols = _columns(con, "docs")
+        wanted = ["id", "company_code", "file_name", "page_count", "parse_status", "superseded"]
+        wanted += [c for c in ("source_url", "url", "doc_url") if c in cols]
+        select = ", ".join(f'"{c}"' for c in wanted if c in cols)
+
+        # 分片查询：SQLite 的变量上限默认 999，候选集合一般很小，但别拿它赌
+        for start in range(0, len(ids), 400):
+            chunk = ids[start : start + 400]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = list(
+                _rows(con, f"SELECT {select} FROM docs WHERE id IN ({placeholders})", tuple(chunk))
+            )
+            for row in rows:
+                keys = set(row.keys())
+                url = ""
+                for name in ("source_url", "url", "doc_url"):
+                    if name in keys and isinstance(row[name], str) and row[name].strip().startswith(
+                        ("http://", "https://")
+                    ):
+                        url = row[name].strip()
+                        break
+                out[int(row["id"])] = {
+                    "id": int(row["id"]),
+                    "company_code": str(row["company_code"] or ""),
+                    "file_name": str(row["file_name"] or ""),
+                    "page_count": int(row["page_count"] or 0),
+                    "parse_status": (str(row["parse_status"]) if "parse_status" in keys else ""),
+                    "superseded": (int(row["superseded"] or 0) if "superseded" in keys else 0),
+                    "source_url": url,
+                }
+    return out
+
+
+def documents_text(document_ids: Sequence[int]) -> dict[int, str]:
+    """批量取文档全文（`docs.text_content`）：`{document_id: text}`。
+
+    只给**服务端核验**用（把引用原文回到所在页逐字比对）。
+    绝不要把返回值放进响应体 —— 合规要求不允许把公告全文发给前端。
+    """
+    ids = [int(i) for i in (document_ids or [])]
+    out: dict[int, str] = {}
+    if not ids:
+        return out
+
+    with connect() as con:
+        _ensure_docs_table(con)
+        for start in range(0, len(ids), 400):
+            chunk = ids[start : start + 400]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = list(
+                _rows(
+                    con,
+                    f"SELECT id, text_content FROM docs WHERE id IN ({placeholders})",
+                    tuple(chunk),
+                )
+            )
+            for row in rows:
+                out[int(row["id"])] = str(row["text_content"] or "")
+    return out
+
+
+def page_text_from_body(body: str, page_number: int) -> str:
+    """在一整坨 `docs.text_content` 里切出**某一页**的正文（纯函数、不碰库）。
+
+    招股书这类文档在 `chunks` 表里没有分片，但正文自带「--- 第N页 ---」页界标记，
+    且该标记与 PDF 查看器页码一一对应（与 `chunks.page_number` 同一口径）。
+    切法与 `page_from_markers` 的定位口径一致：取本页标记之后、下一页标记之前。
+
+    :returns: 该页正文；没有分页标记 / 页码不存在 → 空串
+    """
+    if not isinstance(page_number, int) or page_number < 1:
+        return ""
+    text = str(body or "")
+    if not text:
+        return ""
+    spans = [(int(m.group(1)), m.start(), m.end()) for m in _PAGE_MARKER.finditer(text)]
+    if not spans:
+        return ""
+    for index, (page, _start, end) in enumerate(spans):
+        if page != page_number:
+            continue
+        next_start = spans[index + 1][1] if index + 1 < len(spans) else len(text)
+        return text[end:next_start]
+    return ""
+
+
+def document_page_text(document_id: int, page_number: int) -> str:
+    """取某文档第 N 页的原文，**两种存储方式都支持**。
+
+    1. 有 `chunks`（年报/半年报/摘要）→ 按 `chunks.page_number` 拼回该页；
+    2. 没有 `chunks`（招股书）→ 按 `docs.text_content` 的页界标记切页。
+
+    动态问答的「引文必须在所引页面上逐字核到」就靠这个函数；
+    两条路径合起来，四家公司的候选证据才有统一的核验口径。
+    """
+    if not isinstance(document_id, int) or not isinstance(page_number, int):
+        raise ValueError("document_id / page_number 必须是整数")
+    if page_number < 1:
+        raise ValueError("page_number 必须 >= 1")
+
+    chunk_text = get_page_text(document_id, page_number)
+    if chunk_text.strip():
+        return chunk_text
+
+    body = documents_text([document_id]).get(document_id, "")
+    return page_text_from_body(body, page_number)
+
+
 def page_from_markers(document_id: int, needle: str, *, limit: int = 20) -> list[int]:
     """在 `docs.text_content` 的「--- 第N页 ---」分页标记里定位 `needle` 的页码。
 
@@ -1035,8 +1159,11 @@ __all__ = [
     "count_announcements",
     "db_path",
     "db_status",
+    "document_page_text",
+    "document_pages_meta",
     "document_title",
     "document_url",
+    "documents_text",
     "find_pages",
     "get_announcements",
     "get_company_summary",
@@ -1048,6 +1175,7 @@ __all__ = [
     "has_extended_schema",
     "normalize_cn_digits",
     "page_from_markers",
+    "page_text_from_body",
     "parse_announce_date",
     "parse_created_at",
     "search_announcements",
