@@ -6,7 +6,7 @@
 
 ## 1. 项目目标
 
-Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；前端四公司承载、候选数据库和后端动态问答的补充收口已通过自动化验收，真实 DeepSeek + 浏览器成功链路仍需人工联调。
+Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；前端四公司承载、候选数据库和后端动态问答的补充收口已通过自动化验收，真实 DeepSeek + 浏览器已完成第一轮人工联调，但模型格式遵循仍有波动，不能把动态链路描述为稳定必答。
 
 最高原则：`No Evidence, No Claim`。证据不足时固定回答：
 
@@ -30,10 +30,11 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 - 思看科技未配置后端时使用 Mock；后端超时、HTTP 错误或 JSON 解析失败时自动切换已核验演示数据，并显示 `DEMO FALLBACK`。
 - 其他三家公司不使用思看科技 Mock；动态服务不可用时返回证据不足结构并显示 `SERVICE UNAVAILABLE`。
 - 未准备的问题返回证据不足回答，不伪造公司事实。
-- 数字高亮、Evidence 可靠度等级与原因说明已经完成；官方来源识别覆盖上交所与巨潮资讯，可选 `verification_status` 支持 `verified`、`auto`、`pending`。
+- 数字高亮、Evidence 可靠度等级与原因说明已经完成；官方来源识别覆盖上交所与巨潮资讯（含 `https://static.cninfo.com.cn/`），后端会把该静态站的历史 HTTP 直链规范化为 HTTPS；可选 `verification_status` 支持 `verified`、`auto`、`pending`。
 - FastAPI 响应具有最小运行时校验；非法结构在思看科技降级为已核验 Demo，其他公司进入服务不可用状态。
 - 后端三条确定性回答、真实 SQLite 只读访问、上交所权威来源和四问样例已经接入代码库。
 - 四公司动态 Evidence-first 检索、DeepSeek 结构化回答与候选库重建工具已接入代码库；后端会过滤 `excluded=1`，Claim/Signal 数字按自身引用 Evidence 硬校验，无显式 Evidence ID 时不猜出处。
+- 非思看公司的风险问题会进入动态链路，基于收入、利润、现金流、偿债与营运资金 Evidence 总结可观察信号；回答不得声称覆盖全部经营、法律、行业或合规风险。
 - 新候选库全量 503 条 Evidence 中 407 条可参与回答，96 条隔离；407 条均为同页连续原文且不超过 200 字符，FTS 2845/2845。
 
 ## 3. 稳定 Demo 脚本
@@ -164,7 +165,26 @@ python -m pytest tests_real -q
 npm run build
 ```
 
-2026-10-02 验证结果：构建通过；四家公司切换、未知代码状态、切换清理和非思看公司断网隔离已完成人工验收。思看科技 3 个问题均返回不同答案，8 个 Claim 的 Evidence 均可点击，Evidence 抽屉正常，浏览器运行时错误为 0。动态 API 已通过 Fake LLM、真实候选库和契约自动化验收，仍待真实 DeepSeek + 浏览器人工联调。
+2026-10-02 验证结果：构建通过；四家公司切换、未知代码状态、切换清理和非思看公司断网隔离已完成人工验收。思看科技 3 个问题均返回不同答案，8 个 Claim 的 Evidence 均可点击，Evidence 抽屉正常，浏览器运行时错误为 0。动态 API 已通过 Fake LLM、真实候选库和契约自动化验收；真实 DeepSeek + 浏览器第一轮结果见下节。
+
+### 7.2 真实 DeepSeek + 浏览器第一轮联调（2026-10-02）
+
+联调使用候选库 `cninfo.multicompany.next.db`（SHA-256：`13f95fad520c56539e9b32227c6d48697691ebb56b9c74c20cc3c60fc1567670`），没有替换稳定 `cninfo.db`。模型为 `deepseek-flash`，请求硬超时 40 秒。
+
+- API 首轮财务问题均成功：恒生电子约 5.6 秒、中国长城约 5.3 秒、贝达药业约 9.0 秒，均为 HTTP 200、`X-XRay-Cache: dynamic-llm`、`charts=[]`。返回 Evidence 均属于当前公司且 `excluded=0`，`source_url` 不含 `#page=`。
+- 中国长城首轮暴露 Answer 保留已被删除 Signal 的 `EV-014` 引用，而最终 `evidence[]` 不含该项。现已在 `dynamic_qa.py` 增加 Answer 引用集合校验：Answer 出现未最终返回的 Evidence ID 时，从已通过校验的 Claims 重建；新增真实缺陷回归测试。
+- 修复后中国长城复测约 4.8 秒成功，Answer 中的 Evidence 引用与最终 `evidence[]` 完全一致。
+- 浏览器端贝达药业动态问题成功，约 4.3 秒；Evidence 抽屉、可靠度原因和前端追加的 `#page=1` 正常。四家公司切换会先清空旧回答，未发现串台。
+- 模型格式存在波动：同一财务问题后续在恒生电子约 16.3 秒、中国长城约 8.4 秒时，模型未给出可验证的 Claim/Signal 引用，后端按设计返回 `insufficient`；改问经营现金流后两家公司约 4.9 秒和 8.5 秒，仍因同一原因安全拒答。没有为提高成功率放宽 Evidence 校验。
+- 四家公司水果问题均 HTTP 200、`X-XRay-Cache: insufficient`，固定拒答且四个数组全空；日志确认不调用模型。
+- 思看科技三条稳定问题浏览器端均为 `LIVE API`，答案互不相同，图表数量依次为 1、1、0；Evidence 抽屉、可靠度原因和 PDF 页码链接正常。非思看公司断网模拟为 `SERVICE UNAVAILABLE`，未混入思看科技数据。
+- 后续人工反馈修复：动态问答此前误用公共 LLM 客户端的旧风险分析 system prompt，导致模型输出 S1/S2/S3/S4 说明或非结构化 `conclusion`。现已支持调用方覆盖 system prompt，动态问答固定使用自己的严格 JSON/Evidence 契约。
+- Evidence 抽屉会把纯空格分隔的表格型摘录整理为标题与数字块；只调整空格、换行和分组，不改原文字词与数值。裸千分位金额和裸小数也可与 Evidence 匹配并高亮。
+- 证据不足时保留固定兜底句，并在前端补充确定性的可能原因和改问建议，不把原因当作公司 Claim。
+- 风险问题真实联调：恒生电子、中国长城、贝达药业均得到 `dynamic-llm`，分别返回 6 条 Evidence，且 `charts=[]`。
+- 修复后验证：合成后端 201 项通过；真实库 101 项通过、1 项按设计跳过；前后端契约 25 项通过。
+
+结论：候选库的数据隔离和证据质量已满足本轮验收，但真实模型的格式遵循尚不稳定。当前不建议仅因本轮成功样例就替换稳定 `cninfo.db`；是否换库仍由产品负责人决定。
 
 ## 8. V0.2 架构：规划而非现状
 
@@ -174,7 +194,7 @@ npm run build
 
 ## 9. 下一步优先级
 
-1. 用新候选库启动后端，配置真实 DeepSeek Key，完成四家公司浏览器人工成功链路验收。
+1. 决定是否接受动态模型“有证据则回答、格式不合规则安全拒答”的当前成功率；如需提高成功率，只能在不降低 Evidence 校验强度的前提下改进 Prompt 或确定性格式修复。
 2. 保持思看科技确定性三问及其 Mock/Fallback 不退化，作为动态链路失败时的稳定 Demo。
 3. 自动化补充验收已完成；是否用候选库替换稳定 `cninfo.db` 仍由产品负责人决定。
 4. 验收四家公司 Answer、Claim、Signal、Evidence 与 `charts: []`，确认没有跨公司引用、跨 Evidence 数字借用或被隔离证据泄漏。

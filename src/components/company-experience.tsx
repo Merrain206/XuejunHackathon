@@ -18,7 +18,7 @@ const loadingSteps = [
 type ReliabilityLevel = "high" | "medium" | "pending";
 type ReliabilityReasonState = "verified" | "neutral" | "warning";
 
-const materialNumberPattern = /[-+]?\d[\d,]*(?:\.\d+)?\s*(?:%|亿元|万元|元)/g;
+const materialNumberPattern = /[-+]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:%|亿元|万元|元)|\d+\.\d+)/g;
 
 function parseMaterialNumber(value: string) {
   const numericValue = Number.parseFloat(value.replaceAll(",", ""));
@@ -26,13 +26,15 @@ function parseMaterialNumber(value: string) {
   if (value.includes("%")) return { kind: "percent", value: numericValue };
   if (value.includes("亿元")) return { kind: "amount", value: numericValue * 100_000_000 };
   if (value.includes("万元")) return { kind: "amount", value: numericValue * 10_000 };
-  return { kind: "amount", value: numericValue };
+  if (value.includes("元")) return { kind: "amount", value: numericValue };
+  return { kind: "bare", value: numericValue };
 }
 
 function valuesMatch(left: string, right: string) {
   const parsedLeft = parseMaterialNumber(left);
   const parsedRight = parseMaterialNumber(right);
-  if (!parsedLeft || !parsedRight || parsedLeft.kind !== parsedRight.kind) return false;
+  if (!parsedLeft || !parsedRight) return false;
+  if (parsedLeft.kind !== parsedRight.kind && parsedLeft.kind !== "bare" && parsedRight.kind !== "bare") return false;
   if (parsedLeft.kind === "percent") return Math.abs(parsedLeft.value - parsedRight.value) <= 0.005;
   const scale = Math.max(Math.abs(parsedLeft.value), Math.abs(parsedRight.value), 1);
   return Math.abs(parsedLeft.value - parsedRight.value) / scale <= 0.00001;
@@ -61,6 +63,41 @@ function EvidenceRichText({ text, evidence, onEvidence }: { text: string; eviden
     if (index === matches.length - 1) content.push(text.slice(cursor));
   });
   return content;
+}
+
+function FormattedSourceQuote({ text }: { text: string }) {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  const matches = Array.from(normalized.matchAll(materialNumberPattern));
+  const gaps = matches.slice(1).map((match, index) => {
+    const previous = matches[index];
+    return normalized.slice((previous.index ?? 0) + previous[0].length, match.index ?? 0);
+  });
+  const suffix = matches.length
+    ? normalized.slice((matches.at(-1)?.index ?? 0) + (matches.at(-1)?.[0].length ?? 0))
+    : "";
+  const canUseTableLayout = matches.length >= 2
+    && gaps.every((gap) => !gap.trim())
+    && !suffix.trim();
+
+  if (canUseTableLayout) {
+    const label = normalized.slice(0, matches[0].index ?? 0).trim();
+    return (
+      <blockquote aria-label={`原文摘录：${normalized}`} className="mt-4 border-l-2 border-teal-600 pl-4 text-slate-700">
+        {label ? <p className="text-sm font-medium leading-6 text-slate-800">“{label}</p> : <span>“</span>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {matches.map((match, index) => <span className="rounded-sm border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[13px] text-slate-700" key={`${match.index}-${match[0]}`}>{match[0]}{index === matches.length - 1 ? "”" : ""}</span>)}
+        </div>
+      </blockquote>
+    );
+  }
+
+  return <blockquote className="mt-4 whitespace-pre-line border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">“{normalized}”</blockquote>;
+}
+
+function insufficientReason(sourceMode: AskResponse["sourceMode"], companyId: string) {
+  if (sourceMode === "unavailable") return "可能原因：动态证据服务当前不可用。请恢复后端服务后重试。";
+  if (companyId === "688583") return "可能原因：当前已核验的演示资料没有覆盖这个问题。你可以改问收入结构、盈利质量或主要风险。";
+  return "可能原因：公开披露没有覆盖这个问题，或当前证据与模型输出未达到逐条引用的校验要求。可以尝试补充具体指标或报告期后重试。";
 }
 
 function getEvidenceReliability(item: Evidence, companyId: string): {
@@ -177,8 +214,8 @@ function EvidenceDrawer({ item, companyId, onClose }: { item: Evidence; companyI
 
           <div className="mt-7 rounded-sm border border-slate-200 bg-white p-5">
             <p className="eyebrow">Original excerpt</p>
-            <blockquote className="mt-4 whitespace-pre-line border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">“{item.sourceQuote}”</blockquote>
-            <p className="mt-3 text-[11px] leading-5 text-slate-400">表格型原文按列整理以便阅读，未改动披露数值。</p>
+            <FormattedSourceQuote text={item.sourceQuote} />
+            <p className="mt-3 text-[11px] leading-5 text-slate-400">仅调整空格、换行和数字分组以便阅读，未改动原文字词与披露数值。</p>
           </div>
 
           <a className="mt-6 flex items-center justify-between border-b border-slate-950 pb-3 text-sm font-semibold text-slate-950 transition-colors hover:text-teal-700" href={`${item.sourceUrl}${item.sourcePage ? `#page=${item.sourcePage}` : ""}`} target="_blank" rel="noreferrer">
@@ -369,6 +406,7 @@ export function CompanyExperience({ company }: { company: Company }) {
               <article className="answer-card animate-rise">
                 <div className="flex items-center justify-between border-b border-slate-200 pb-4"><p className="eyebrow">Evidence-based answer</p><span className="verified-label"><span>{response.evidence.length ? "✓" : "—"}</span> {response.evidence.length ? "已验证" : "证据不足"}</span></div>
                 <p className="mt-6 max-w-3xl text-[17px] leading-8 text-slate-800"><EvidenceRichText text={response.answer} evidence={response.evidence} onEvidence={setSelectedEvidence} /></p>
+                {!response.evidence.length ? <div className="mt-5 max-w-3xl rounded-sm border border-slate-200 bg-slate-50 px-4 py-3"><p className="text-xs font-semibold text-slate-700">为什么没有给出结论</p><p className="mt-1 text-xs leading-5 text-slate-500">{insufficientReason(response.sourceMode, company.id)}</p></div> : null}
                 {response.claims.length ? <div className="mt-7 border-t border-slate-200 pt-5"><p className="eyebrow">Key claims</p><div className="mt-3 space-y-3">{response.claims.map((claim, index) => <div className="flex gap-3 text-sm leading-6" key={claim.id}><span className="claim-index">{String(index + 1).padStart(2, "0")}</span><p className="flex-1 text-slate-700"><EvidenceRichText text={claim.text} evidence={response.evidence.filter((item) => claim.evidenceIds.includes(item.id))} onEvidence={setSelectedEvidence} /></p><div className="flex flex-wrap justify-end gap-1">{claim.evidenceIds.map((id) => { const item = response.evidence.find((entry) => entry.id === id); return item ? <button className="claim-evidence-button" key={id} onClick={() => setSelectedEvidence(item)}>{id}</button> : null; })}</div></div>)}</div></div> : null}
               </article>
 

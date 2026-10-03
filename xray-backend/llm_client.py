@@ -211,6 +211,7 @@ def generate_answer(
     stock_code: str = "",
     signals: Sequence[dict[str, Any]] = (),
     prompt_override: str | None = None,
+    system_prompt_override: str | None = None,
     thinking: bool | None = None,
 ) -> LLMResult:
     """调用 DeepSeek 生成回答；**永不抛异常**。
@@ -219,6 +220,8 @@ def generate_answer(
       * 默认：按「问题 + 证据」组装问答 prompt（ask.py 的实时问答）；
       * `prompt_override`：直接使用调用方给的完整 user prompt
         （analyzer.py 的公告风险分析用，需要 JSON 输出格式的专门指令）。
+      * `system_prompt_override`：调用方有独立输出契约时覆盖默认 system prompt；
+        留空时保持现有风险分析行为。
 
     :param thinking: 是否开启思考模式。**None = 用 settings.DEEPSEEK_THINKING**。
         ⚠️ 实测（deepseek-flash @ 本接入点）：思考模式对"写几句话结论"有帮助，
@@ -282,7 +285,7 @@ def generate_answer(
         create_kwargs: dict[str, Any] = {
             "model": settings.DEEPSEEK_MODEL,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt_override or SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             "temperature": settings.LLM_TEMPERATURE,

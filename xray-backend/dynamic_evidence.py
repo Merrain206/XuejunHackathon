@@ -52,6 +52,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 import db
 from config import settings
@@ -91,6 +92,21 @@ METRIC_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
         ("趋势", "几个报告期", "走势", "近几期", "变化趋势"),
         ("revenue", "net_profit", "operating_cash_flow"),
+    ),
+    (
+        # 其他三家公司当前没有专门的 risk Evidence；风险问答只能基于已有财务
+        # Evidence 识别收入、利润、现金流、偿债与营运资金方面的可观察信号，
+        # 不能声称覆盖全部经营、法律或行业风险。
+        ("风险", "隐患", "不确定性", "值得关注", "需要关注", "关注点"),
+        (
+            "revenue",
+            "net_profit_attr",
+            "net_profit_deducted",
+            "operating_cash_flow",
+            "debt_ratio",
+            "accounts_receivable",
+            "inventory",
+        ),
     ),
     (
         # ⚠️ 顺序原则：**更具体的关键词必须排在更宽泛的前面**。
@@ -992,6 +1008,15 @@ def retrieve_candidates(
     return selected
 
 
+def _canonical_source_url(value: str) -> str:
+    """返回不带 fragment 的来源地址，并将巨潮静态站直链统一为 HTTPS。"""
+    parts = urlsplit(str(value or "").strip())
+    scheme = parts.scheme
+    if scheme.lower() == "http" and (parts.hostname or "").lower() == "static.cninfo.com.cn":
+        scheme = "https"
+    return urlunsplit((scheme, parts.netloc, parts.path, parts.query, ""))
+
+
 def _source_url_for(row: sqlite3.Row, code: str) -> str:
     """候选证据的对外链接。
 
@@ -1005,16 +1030,16 @@ def _source_url_for(row: sqlite3.Row, code: str) -> str:
     """
     keys = row.keys()
     if "source_url" in keys and row["source_url"]:
-        url = str(row["source_url"])
+        url = _canonical_source_url(str(row["source_url"]))
         if url.startswith(("http://", "https://")):
-            return url.split("#", 1)[0]
+            return url
     try:
         resolved = db.document_url(int(row["document_id"]))
     except (db.DatabaseNotReadyError, ValueError):
         resolved = None
     if resolved:
-        return resolved.split("#", 1)[0]
-    return db.cninfo_list_url(code)
+        return _canonical_source_url(resolved)
+    return _canonical_source_url(db.cninfo_list_url(code))
 
 
 def candidates_by_id(candidates: Sequence[Candidate]) -> dict[str, Candidate]:
@@ -1072,6 +1097,12 @@ def is_in_scope(question: str) -> bool:
     return bool(metrics_for_question(question))
 
 
+def is_risk_question(question: str) -> bool:
+    """是否为需要基于财务 Evidence 识别风险信号的问题。"""
+    text = str(question or "")
+    return any(keyword in text for keyword in METRIC_RULES[1][0])
+
+
 __all__ = [
     "DEFAULT_METRICS",
     "MAX_CANDIDATES",
@@ -1085,6 +1116,7 @@ __all__ = [
     "has_value_token",
     "has_verifiable_content",
     "is_in_scope",
+    "is_risk_question",
     "label_from_quote",
     "matched_keywords",
     "metrics_for_question",

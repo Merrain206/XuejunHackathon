@@ -16,7 +16,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 写 Next.js 代码前，先读取 `node_modules/next/dist/docs/` 中与改动相关的本地文档。
 - 前端与后端只通过 `POST /companies/{id}/ask` 的结构化 JSON 契约耦合；snake_case 到前端 camelCase 的转换集中放在 `src/lib/api.ts`。
 - `NEXT_PUBLIC_API_BASE_URL` 未配置时使用 Mock；后端超时、HTTP 错误或解析失败时必须自动降级为已核验演示数据，不能破坏 Demo。
-- 思看科技 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险；另有第四问「你的员工喜欢吃水果吗？」用于演示证据不足。其他公司允许基于 SQLite Evidence + LLM 回答未预设金融问题，但同样必须通过 Evidence 校验；动态回答第一版可以不含图表。
+- 思看科技 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险；另有第四问「你的员工喜欢吃水果吗？」用于演示证据不足。其他公司允许基于 SQLite Evidence + LLM 回答未预设金融问题，也允许基于财务 Evidence 总结可观察的风险信号，但不得声称覆盖全部经营、法律、行业或合规风险；所有动态回答同样必须通过 Evidence 校验，第一版可以不含图表。
 - Evidence 页码使用 PDF 查看器页码，且必须与引用的 PDF 版本配套（两份 PDF 的页码不可混用）：招股说明书（注册稿，506 页）第 **321、322、324** 页；2025 半年报（269 页）第 **2、8、9、43** 页。核验记录见 `docs/HANDOFF.md` 第 4.1 节。
 - 后端 `source_url` 只返回不带 fragment 的原始 PDF URL，页码通过 `source_page` 独立返回；前端负责追加 `#page=N`，禁止前后端重复追加。
 - 思看科技 `suggested_questions` 保持原四条和固定顺序；其他公司可以使用已确认的通用财务问题，但不得由模型自由生成或推荐无证据覆盖的问题。

@@ -441,25 +441,36 @@ def test_risk_category_evidence_maps_to_a_frontend_safe_category():
     assert to_evidence_category("company") == "company"
 
 
-def test_risk_questions_do_not_borrow_financial_evidence(companies, ideal_llm):
-    """问风险问题时，不得拿营收/净利润数据来充数（那是最坏的一种"答非所问"）。
-
-    新库只有 688583 有（3 条）风险类证据，而且 688583 的风险问题走的是
-    demo-handler 稳定路径。所以其他公司问风险时**只能**诚实拒答 ——
-    比返回一堆答非所问的财务数字好得多。
-    """
+def test_risk_questions_use_company_owned_financial_evidence(companies, ideal_llm):
+    """风险问题可总结财务 Evidence 信号，但必须保持公司隔离与引用完整。"""
     risk_question = "公司的主要风险因素有哪些？"
     import ask
+    from response_validator import assert_valid, verify_evidence_against_source
 
     for code in companies:
         payload, source = ask.build_answer_payload(code, question=risk_question)
+        assert_valid(payload)
         if source == "demo-handler":
             # 思看科技的稳定风险回答：必须是它自己那条已核验链路
             assert code == "688583"
             assert payload["evidence"]
             continue
-        assert source == "insufficient", f"{code} 问风险却走了 {source}"
-        assert payload["evidence"] == []
+        assert source == "dynamic-llm", f"{code} 风险问题未进入动态链路：{source}"
+        assert payload["claims"]
+        assert payload["evidence"]
+        assert payload["charts"] == []
+
+        known = {evidence["id"] for evidence in payload["evidence"]}
+        for group in ("claims", "signals"):
+            for entry in payload[group]:
+                assert set(entry["evidence_ids"]) <= known
+
+        check = verify_evidence_against_source(payload, stock_code=code)
+        assert check.ok, check.errors
+        for evidence in payload["evidence"]:
+            document_id = int(evidence["document_id"])
+            meta = db.document_pages_meta([document_id])[document_id]
+            assert meta["company_code"] == code
 
 
 # ---------------------------------------------------------------------------

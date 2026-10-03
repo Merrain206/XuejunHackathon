@@ -38,6 +38,7 @@ from dynamic_evidence import (
     Candidate,
     candidates_by_id,
     is_in_scope,
+    is_risk_question,
     render_candidates_for_prompt,
     retrieve_candidates,
 )
@@ -114,9 +115,16 @@ _JSON_REMINDER = (
 
 def build_user_prompt(question: str, candidates: Sequence[Candidate], stock_code: str) -> str:
     """组装用户 Prompt：问题 + 候选证据（编号、指标、报告期、原文摘录）。"""
+    risk_scope = (
+        "\n【风险问题边界】只能总结候选财务证据直接反映的风险信号；"
+        "不得声称已覆盖公司的全部经营、法律、行业或合规风险。\n"
+        if is_risk_question(question)
+        else ""
+    )
     return (
         f"公司代码：{stock_code}\n"
-        f"问题：{question}\n\n"
+        f"问题：{question}\n"
+        f"{risk_scope}\n"
         f"【候选证据】（只能引用这些 id）\n"
         f"{render_candidates_for_prompt(candidates)}\n\n"
         f"请基于以上候选证据回答问题。若证据不足，按规则 3 返回兜底 JSON。"
@@ -488,8 +496,12 @@ def validate_dynamic_payload(
         for c in selected
     ])
     missing_answer = _numbers_supported(answer, corpus)
-    if missing_answer:
-        notes.append(f"answer 的数字未被最终返回 Evidence 支撑：{missing_answer}")
+    dangling_answer_refs = sorted(set(_EVIDENCE_REF_RE.findall(answer)) - active_ids)
+    if missing_answer or dangling_answer_refs:
+        if missing_answer:
+            notes.append(f"answer 的数字未被最终返回 Evidence 支撑：{missing_answer}")
+        if dangling_answer_refs:
+            notes.append(f"answer 引用了未最终返回的 Evidence：{dangling_answer_refs}")
         if claims:
             answer = _answer_from_claims(claims)
         else:
@@ -630,7 +642,7 @@ def _answer_from_claims(claims: Sequence[dict[str, Any]]) -> str:
     宁可给一句朴素的结论，也不要因为 answer 字段缺失就把整次回答丢掉 ——
     那会让一个本来有证据的答案退化成「无法回答」。
     """
-    parts = [c["text"] for c in claims[:3]]
+    parts = [str(c["text"]).rstrip("。；;，, ") for c in claims[:3]]
     return "根据公开披露数据：" + "；".join(parts) + "。"
 
 
@@ -721,6 +733,7 @@ def build_dynamic_response(
         [c.to_prompt_item() for c in candidates],
         stock_code=code,
         prompt_override=prompt,
+        system_prompt_override=SYSTEM_PROMPT,
         thinking=False,
     )
 

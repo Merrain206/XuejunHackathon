@@ -30,6 +30,27 @@ from response_validator import INSUFFICIENT_ANSWER
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("source_url", "expected"),
+    [
+        (
+            "http://static.cninfo.com.cn/finalpage/report.PDF#page=3",
+            "https://static.cninfo.com.cn/finalpage/report.PDF",
+        ),
+        (
+            "https://static.cninfo.com.cn/finalpage/report.PDF#page=3",
+            "https://static.cninfo.com.cn/finalpage/report.PDF",
+        ),
+        (
+            "http://example.com/report.pdf#page=3",
+            "http://example.com/report.pdf",
+        ),
+    ],
+)
+def test_canonical_source_url(source_url: str, expected: str):
+    assert de._canonical_source_url(source_url) == expected
+
+
 def _candidate(
     ev_id: str,
     *,
@@ -278,6 +299,22 @@ def test_unsupported_numbers_are_reported(candidates):
     assert "17.70" in validated["answer"]
 
 
+def test_answer_with_dropped_evidence_reference_is_rebuilt(candidates):
+    """Answer 不得保留未进入最终 evidence[] 的引用，即使金额使用了换算单位。"""
+    payload = {
+        "answer": "营业收入同比增长 17.70%（EV-001），经营现金流为 0.31 亿元（EV-003）。",
+        "claims": [
+            {"id": "CL-1", "text": "营业收入同比增长 17.70%", "evidence_ids": ["EV-001"]}
+        ],
+        "signals": [],
+    }
+    validated, notes = _validate(payload, candidates)
+    assert [evidence["id"] for evidence in validated["evidence"]] == ["EV-001"]
+    assert "EV-003" not in validated["answer"]
+    assert "0.31" not in validated["answer"]
+    assert any("未最终返回的 Evidence" in note for note in notes)
+
+
 def test_strict_numbers_mode_degrades(candidates):
     """严格模式（可开关）下，数字核不到就整次证据不足。"""
     payload = {
@@ -427,6 +464,21 @@ def test_missing_answer_is_rebuilt_from_claims(candidates):
     assert validated["answer"].strip()
     assert validated["answer"] != INSUFFICIENT_ANSWER
     assert "17.70%" in validated["answer"]
+
+
+def test_rebuilt_answer_does_not_duplicate_punctuation(candidates):
+    payload = {
+        "answer": "",
+        "claims": [
+            {"id": "CL-1", "text": "营业收入同比增长 17.70%。", "evidence_ids": ["EV-001"]},
+            {"id": "CL-2", "text": "归母净利润同比增长 2.06%；", "evidence_ids": ["EV-002"]},
+        ],
+        "signals": [],
+    }
+    validated, _ = _validate(payload, candidates)
+    assert "。；" not in validated["answer"]
+    assert "。。" not in validated["answer"]
+    assert validated["answer"].endswith("。")
 
 
 def test_evidence_max_cap_drops_extra_references(candidates):
@@ -595,6 +647,15 @@ def test_metrics_for_question_maps_financial_intents():
         "eps",
     )
     assert de.metrics_for_question("经营现金流表现如何？") == ("operating_cash_flow",)
+    assert de.metrics_for_question("这个公司有什么风险？") == (
+        "revenue",
+        "net_profit_attr",
+        "net_profit_deducted",
+        "operating_cash_flow",
+        "debt_ratio",
+        "accounts_receivable",
+        "inventory",
+    )
     # 跨报告期的意图优先于具体指标，否则「盈利趋势」会被拆成单指标问题
     assert de.metrics_for_question("近几个报告期的盈利趋势是什么？") == (
         "revenue",
@@ -622,6 +683,83 @@ def test_is_in_scope_blocks_non_financial_questions():
     assert not de.is_in_scope("你的员工喜欢吃水果吗？")
     assert not de.is_in_scope("公司食堂的菜好不好吃？")
     assert de.is_in_scope("最近营业收入和归母净利润表现如何？")
+    assert de.is_in_scope("这个公司有什么风险？")
+    assert de.is_risk_question("目前最值得关注的风险是什么？")
+
+
+def test_risk_question_reaches_dynamic_model(monkeypatch, candidates):
+    """风险问题必须进入 Evidence-first 链路，而不是在覆盖面判断处直接拒答。"""
+    called: list[str] = []
+    monkeypatch.setattr(
+        dynamic_qa, "retrieve_candidates", lambda code, question: list(candidates)
+    )
+
+    def _llm(*args, **kwargs):
+        called.append("llm")
+        return LLMResult(
+            text=json.dumps(
+                {
+                    "answer": "营业收入同比增长 17.70%，暂未显示收入下滑风险（EV-001）。",
+                    "claims": [
+                        {
+                            "id": "CL-1",
+                            "text": "营业收入同比增长 17.70%",
+                            "evidence_ids": ["EV-001"],
+                        }
+                    ],
+                    "signals": [],
+                },
+                ensure_ascii=False,
+            ),
+            ok=True,
+            source="deepseek",
+            model="test",
+        )
+
+    payload, source = dynamic_qa.build_dynamic_response(
+        "600570", "这个公司有什么风险？", llm=_llm
+    )
+    assert called == ["llm"]
+    assert source == dynamic_qa.SOURCE_DYNAMIC
+    assert payload["claims"]
+    assert payload["evidence"]
+
+
+def test_dynamic_call_uses_strict_json_system_prompt(monkeypatch, candidates):
+    """动态链路不能误用公共客户端要求 S1/S2/S3/S4 的旧 system prompt。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        dynamic_qa, "retrieve_candidates", lambda code, question: list(candidates)
+    )
+
+    def _llm(*args, **kwargs):
+        captured.update(kwargs)
+        return LLMResult(
+            text=json.dumps(
+                {
+                    "answer": "营业收入同比增长 17.70%（EV-001）。",
+                    "claims": [
+                        {
+                            "id": "CL-1",
+                            "text": "营业收入同比增长 17.70%",
+                            "evidence_ids": ["EV-001"],
+                        }
+                    ],
+                    "signals": [],
+                },
+                ensure_ascii=False,
+            ),
+            ok=True,
+            source="deepseek",
+            model="test",
+        )
+
+    dynamic_qa.build_dynamic_response(
+        "600570", "最近营业收入表现如何？", llm=_llm
+    )
+    assert captured["system_prompt_override"] == dynamic_qa.SYSTEM_PROMPT
+    assert "S1/S2/S3/S4" not in captured["system_prompt_override"]
+    assert captured["thinking"] is False
 
 
 # ---------------------------------------------------------------------------
