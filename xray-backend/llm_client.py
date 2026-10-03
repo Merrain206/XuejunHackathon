@@ -213,6 +213,7 @@ def generate_answer(
     prompt_override: str | None = None,
     system_prompt_override: str | None = None,
     thinking: bool | None = None,
+    json_mode: bool = False,
 ) -> LLMResult:
     """调用 DeepSeek 生成回答；**永不抛异常**。
 
@@ -228,6 +229,8 @@ def generate_answer(
            但对"严格 JSON 抽取"是**有害**的 —— 模型会一直推演、把整个 max_tokens
            预算耗在 reasoning 上，正文永远是空字符串（finish_reason=length）。
            因此 analyzer 的 JSON 分析显式传 thinking=False。
+    :param json_mode: 请求兼容 OpenAI 的原生 JSON Object 输出；动态结构化问答开启，
+        普通文本回答保持关闭。
 
     返回 LLMResult：ok=True 时 text 为模型输出；ok=False 时调用方必须走降级路径，
     并把 result.notice 拼进回答让用户知道发生了什么。
@@ -293,6 +296,8 @@ def generate_answer(
         }
         if extra_body:
             create_kwargs["extra_body"] = extra_body
+        if json_mode:
+            create_kwargs["response_format"] = {"type": "json_object"}
 
         response = client.chat.completions.create(**create_kwargs)
         content = (response.choices[0].message.content or "").strip()
@@ -313,6 +318,10 @@ def generate_answer(
             details = getattr(response.usage, "completion_tokens_details", None)
             if details is not None:
                 usage["reasoning_tokens"] = getattr(details, "reasoning_tokens", None)
+        try:
+            usage["finish_reason"] = getattr(response.choices[0], "finish_reason", None)
+        except (AttributeError, IndexError):
+            pass
         if reasoning:
             # 只记长度，不落库整段思考（体积大且无核验价值）
             usage["reasoning_chars"] = len(reasoning)

@@ -1,12 +1,12 @@
 # Ask the Company — Codex 交接记忆
 
-> 状态日期：2026-10-02  
+> 状态日期：2026-10-03
 > 工作区：`D:\Codes\XueJunHackathon`  
 > 当前角色：前端开发；用户负责遇到不确定产品取舍时做决策
 
 ## 1. 项目目标
 
-Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；前端四公司承载、候选数据库和后端动态问答的补充收口已通过自动化验收，真实 DeepSeek + 浏览器已完成第一轮人工联调，但模型格式遵循仍有波动，不能把动态链路描述为稳定必答。
+Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品。用户不是阅读大量公告，而是直接向公司提问；系统只基于可追溯 Evidence 生成 Answer、Claim、Signal 和 Chart。思看科技仍是稳定演示基线；动态链路已经从财务问题扩展到治理、审计、股东回报、员工与激励、供应链、研发和风险等普通投资者主题。自动化验收和第二轮真实 DeepSeek API 冒烟已通过，但公告没有披露或 Evidence 不完整时仍必须部分回答或安全拒答，不能描述为任意问题必答。
 
 最高原则：`No Evidence, No Claim`。证据不足时固定回答：
 
@@ -16,7 +16,7 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 
 ## 2. 当前已经完成
 
-> 本节只描述已经完成并验收的能力。动态链路已通过数据库、合成后端、真实库与前端契约测试；尚未执行真实 DeepSeek + 浏览器人工验收，不能把它描述为比赛现场已验证的稳定链路。
+> 本节只描述已经完成并验收的能力。动态链路已通过数据库、合成后端、真实库、前端契约和真实 DeepSeek API 冒烟；扩展主题仍需产品负责人继续做浏览器人工验收。
 
 - Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 前端。
 - 公司页路由：`/company/{id}`，根路径自动跳转到 `/company/688583`。
@@ -34,8 +34,9 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 - FastAPI 响应具有最小运行时校验；非法结构在思看科技降级为已核验 Demo，其他公司进入服务不可用状态。
 - 后端三条确定性回答、真实 SQLite 只读访问、上交所权威来源和四问样例已经接入代码库。
 - 四公司动态 Evidence-first 检索、DeepSeek 结构化回答与候选库重建工具已接入代码库；后端会过滤 `excluded=1`，Claim/Signal 数字按自身引用 Evidence 硬校验，无显式 Evidence ID 时不猜出处。
-- 非思看公司的风险问题会进入动态链路，基于收入、利润、现金流、偿债与营运资金 Evidence 总结可观察信号；回答不得声称覆盖全部经营、法律、行业或合规风险。
-- 新候选库全量 503 条 Evidence 中 407 条可参与回答，96 条隔离；407 条均为同页连续原文且不超过 200 字符，FTS 2845/2845。
+- 非思看公司的财务、治理、审计、股东回报、员工与激励、供应链、关联关系、研发和风险问题会进入动态链路；回答不得声称覆盖全部经营、法律、行业或合规风险。
+- 扩展候选库 v2 共有 2254 条 Evidence，其中 2158 条可参与回答、96 条隔离；可用 Evidence 均为同页连续原文且不超过 200 字符，FTS 2845/2845。
+- 动态图表不交给模型生成，而是由后端从最终引用 Evidence 确定性构建。当前支持 `line` / `bar`，趋势问题最多给 3 张折线图，最近一期复合指标会按单位拆成最多 3 张柱状图。
 
 ## 3. 稳定 Demo 脚本
 
@@ -102,7 +103,7 @@ Content-Type: application/json
 }
 ```
 
-`sourceMode: "api" | "mock" | "fallback" | "unavailable"` 由前端适配层添加，后端无需返回。不要让后端直接生成 ECharts JavaScript，只返回语义图表数据。
+`sourceMode: "api" | "mock" | "fallback" | "unavailable"` 由前端适配层添加，后端无需返回。图表类型支持 `line` 和 `bar`。不要让模型或后端返回 ECharts JavaScript，只返回由最终 Evidence 确定性构建的语义图表数据。
 
 Evidence 可选返回 `verification_status: "verified" | "auto" | "pending"`；字段出现时前端会校验枚举值。
 
@@ -111,13 +112,16 @@ Evidence 可选返回 `verification_status: "verified" | "auto" | "pending"`；�
 ## 6. 关键文件
 
 - `src/components/company-experience.tsx`：公司页主体、提问状态、加载步骤、Answer/Signal/Evidence 交互。
-- `src/components/evidence-chart.tsx`：ECharts 渲染，支持正负值范围。
+- `src/components/evidence-chart.tsx`：ECharts 折线图/柱状图渲染，支持正负值范围。
 - `src/lib/companies.ts`：四家公司资料、首页指标和推荐问题的单一来源。
 - `src/lib/mock-data.ts`：三套 Demo 回答、真实证据和问题路由。
 - `src/lib/api.ts`：FastAPI 请求、45 秒超时、字段转换和按公司隔离的失败降级。
 - `src/lib/types.ts`：前端统一数据类型。
 - `src/app/globals.css`：页面样式和动画。
 - `README.md`：启动方法与接口示例。
+- `expand_investor_evidence.py`：从公告全文按 54 个普通投资者主题扩展 Evidence，始终写入新候选库。
+- `xray-backend/investor_topics.py`：扩库与动态问题路由共用的主题目录。
+- `docs/INVESTOR_EVIDENCE_EXPANSION.md`：扩展库统计、主题范围、缺口和复现命令。
 - `AGENTS.md`：下次 Codex 必须遵守的项目约束。
 
 ## 7. 运行与验证
@@ -141,7 +145,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 cd xray-backend
 python -m pip install -r requirements.txt
 # 动态四公司联调必须显式使用已验收候选库；不要擅自覆盖稳定 cninfo.db
-$env:DATABASE_PATH = "D:\Codes\XueJunHackathon\cninfo.multicompany.next.db"
+$env:DATABASE_PATH = "D:\Codes\XueJunHackathon\cninfo.multicompany.expanded.v2.db"
 $env:DB_PATH_STRICT = "true"
 python main.py                        # http://127.0.0.1:8000
 curl.exe -s http://127.0.0.1:8000/health     # 看 db_path 与 database
@@ -184,7 +188,25 @@ npm run build
 - 风险问题真实联调：恒生电子、中国长城、贝达药业均得到 `dynamic-llm`，分别返回 6 条 Evidence，且 `charts=[]`。
 - 修复后验证：合成后端 201 项通过；真实库 101 项通过、1 项按设计跳过；前后端契约 25 项通过。
 
-结论：候选库的数据隔离和证据质量已满足本轮验收，但真实模型的格式遵循尚不稳定。当前不建议仅因本轮成功样例就替换稳定 `cninfo.db`；是否换库仍由产品负责人决定。
+### 7.3 普通投资者 Evidence 扩展与第二轮 API 冒烟（2026-10-03）
+
+- 基于 `cninfo.multicompany.next.db` 只读复制生成 `cninfo.multicompany.expanded.v2.db`，没有覆盖旧扩展库或稳定库。v2 SHA-256 为 `639e6c8c672c188c259829d3917c65b15d73a6f33f00f2ba6eb151cdbe90cac1`。
+- 新增 1751 条 Evidence，扩展后共 2254 条；2158 条可参与回答、96 条沿用原隔离状态。全部可用摘录通过同页连续原文、最长 200 字符和数字边界机械核验。
+- 主题目录新增 54 类普通投资者问题；v2 将“每股分红方案”从历史分红中独立出来，避免派息率证据被总额/政策文本占满候选配额。完整范围、各公司覆盖缺口和复现命令见 `docs/INVESTOR_EVIDENCE_EXPANSION.md`。
+- DeepSeek 使用原生 JSON 输出模式，降低复杂复合问题因格式不合规而拒答的概率；证据校验没有放宽。
+- 真实 API 冒烟通过：恒生电子审计意见/审计机构/关键审计事项、中国长城董事会与中小股东机制、思看科技员工持股平台与劳务外包、恒生电子净现比、贝达药业和中国长城资产负债问题均返回 Evidence-first 的完整或明确部分回答。
+- 复合问题只对已取到 Evidence 的子问题作答，并明确列出未披露/未检索到的部分；不会因为一个子问题缺证据而丢弃整份回答。
+- 当前只允许两类受控派生计算：净现比必须由同期间经营现金流净额与归母净利润 Evidence 共同支撑；持股分红金额必须由用户给出的持股数和 Evidence 明确披露的每股/每若干股现金红利共同计算。两者都必须展示公式，其余数字仍要求直接出现在引用 Evidence 中。
+- 同行毛利率比较尚未实现：当前四家公司不构成同行样本，数据库也没有真实可比公司集合，不能把四家公司强行当成同行。
+- 第二轮人工反馈后的修复：普通投资者主题的 Evidence 卡片只显示规范主题名和报告期，不再把同一段原文同时当摘要和原文重复展示；抽屉会突出显示金额、比例、人数、席位、股数、工时等数字。表格数字后紧邻的 `元/万元/亿元/千元` 会保留在连续摘录中。
+- “实控人提名几席”不再宽泛召回实际控制人承诺类 Evidence；“董事会一共几席”会正确命中董事会构成。
+- 净现比改为同期间 Evidence 的确定性计算，不调用模型；分红问法在披露了每股/每若干股派息率时确定性计算用户持股金额，否则明确解释缺少换算依据。
+- v2 真实分红复测：恒生电子约 12.0 秒返回 `dynamic-llm`，按 2026 披露方案每 10 股 2 元计算 1000 股约 200 元；中国长城约 15.2 秒返回 `dynamic-llm`，按 2023 披露方案每 10 股 0.07 元计算约 7 元。两条计算 Claim 的基数和派息率都能在各自返回的 Evidence 原文中直接核到。
+- 前端 Investigation progress 现在显示真实等待时间，并按 0.8 / 2.5 / 6 / 11 秒阈值推进阶段，避免前四步快速闪过后长期停在最后一步。短请求可以在中间阶段直接完成；该进度是基于请求耗时的诚实状态提示，不声称后端提供了实时阶段流。
+
+本轮自动化结果：扩库脚本 4 项通过；数据库验收 0 失败、1 个已解释警告；后端合成测试全通过；真实库测试 101 项通过、1 项按设计跳过；前后端契约 25 项通过；Next.js 生产构建通过。
+
+结论：扩展候选库的数据隔离和机械证据质量满足本轮验收，真实复杂问法的成功率明显改善，但仍需浏览器人工检查展示效果。当前没有替换稳定 `cninfo.db`；是否换库仍由产品负责人决定。
 
 ## 8. V0.2 架构：规划而非现状
 
@@ -194,15 +216,16 @@ npm run build
 
 ## 9. 下一步优先级
 
-1. 决定是否接受动态模型“有证据则回答、格式不合规则安全拒答”的当前成功率；如需提高成功率，只能在不降低 Evidence 校验强度的前提下改进 Prompt 或确定性格式修复。
+1. 用浏览器人工覆盖 `docs/INVESTOR_EVIDENCE_EXPANSION.md` 中的主题样例，重点检查复合问题的部分回答、2–3 张图表布局和移动端可读性。
 2. 保持思看科技确定性三问及其 Mock/Fallback 不退化，作为动态链路失败时的稳定 Demo。
 3. 自动化补充验收已完成；是否用候选库替换稳定 `cninfo.db` 仍由产品负责人决定。
-4. 验收四家公司 Answer、Claim、Signal、Evidence 与 `charts: []`，确认没有跨公司引用、跨 Evidence 数字借用或被隔离证据泄漏。
+4. 如需真正回答“毛利率跟同行比怎么样”，先由产品负责人确认同行口径，再补齐同行公司官方披露 Evidence；不要拿当前四家公司互相比。
+5. 继续确认没有跨公司引用、跨 Evidence 数字借用、被隔离证据泄漏或模型生成的无证据图表。
 
 需要用户决策的问题：真实后端契约发生变化、是否启用维护模式、是否牺牲 Demo 稳定性增加新功能。不要擅自扩大范围。
 
 ## 10. 工作区注意事项
 
 - 修改前先执行 `git status --short`，不要覆盖其他同学的未提交改动。
-- `cninfo.db`、`cninfo(1).db`、`ruvector.db` 不要删除、覆盖或提交，除非用户明确授权。
+- `cninfo.db`、`cninfo(1).db`、`ruvector.db`、`cninfo.multicompany.next.db`、`cninfo.multicompany.expanded.db`、`cninfo.multicompany.expanded.v2.db` 不要删除、覆盖或提交，除非用户明确授权。
 - 仓库只保留 Ask the Company 前端、后端、数据库管道与项目文档，不要混入其他独立项目。

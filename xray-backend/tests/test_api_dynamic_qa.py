@@ -244,8 +244,8 @@ def test_evidence_array_only_contains_referenced_candidates(candidates):
     assert [e["id"] for e in validated["evidence"]] == ["EV-001"]
 
 
-def test_charts_always_empty(candidates):
-    """P0 动态回答固定 charts=[]（任务书第 2.3 节）。"""
+def test_model_charts_are_ignored_when_one_metric_cannot_form_chart(candidates):
+    """模型自带 charts 被忽略；单一指标单期不足以生成确定性图表。"""
     payload = {
         "answer": "结论。",
         "claims": [{"id": "CL-1", "text": "同比增长 17.70%", "evidence_ids": ["EV-001"]}],
@@ -297,6 +297,160 @@ def test_unsupported_numbers_are_reported(candidates):
     assert any("99.99" in n for n in notes)
     assert "99.99" not in validated["answer"]
     assert "17.70" in validated["answer"]
+
+
+def test_small_count_with_unit_must_be_supported():
+    board = _candidate(
+        "EV-001",
+        metric="board_composition",
+        quote="公司董事会由9名董事组成，其中独立董事3名并依法履职",
+    )
+    payload = {
+        "answer": "董事会由10名董事组成（EV-001）。",
+        "claims": [{"id": "CL-1", "text": "董事会由10名董事组成", "evidence_ids": ["EV-001"]}],
+        "signals": [],
+    }
+    validated, notes = _validate(payload, [board])
+    assert validated["claims"] == []
+    assert validated["evidence"] == []
+    assert any("10" in note for note in notes)
+
+
+def test_nomination_question_does_not_retrieve_generic_controller_evidence():
+    metrics = de.metrics_for_question("董事会几席？实控人提名几席？小股东有没有制衡机制？")
+    assert "board_composition" in metrics
+    assert "board_nomination" in metrics
+    assert "minority_protection" in metrics
+    assert "actual_controller" not in metrics
+
+
+def test_contiguous_quote_includes_nearby_table_unit():
+    page = "商誉减值测试\n单位：万元\n项目 本期数\n商誉减值准备 1,234.50"
+    quote = de.contiguous_quote(page, "商誉减值准备 | 1,234.50", label="商誉减值准备")
+    assert "单位：万元" in quote
+    assert de.squeeze(quote) in de.squeeze(page)
+
+
+def test_contiguous_quote_keeps_unit_immediately_after_value():
+    page = "本期计提商誉减值准备2,993.34万元。"
+    quote = de.contiguous_quote(page, "商誉减值准备 | 2,993.34", label="商誉减值准备")
+    assert quote == "商誉减值准备2,993.34万元"
+    assert de.squeeze(quote) in de.squeeze(page)
+
+
+def test_contiguous_quote_keeps_small_dividend_base_before_amount():
+    page = "向全体股东每10股派发现金红利人民币0.07元（含税）。"
+    quote = de.contiguous_quote(
+        page,
+        "每10股派发现金红利人民币0.07元（含税）",
+        label="",
+    )
+    assert quote == "每10股派发现金红利人民币0.07元"
+    assert de.squeeze(quote) in de.squeeze(page)
+
+
+def test_trend_chart_uses_only_cited_evidence():
+    trend = [
+        _candidate("EV-001", period="2023FY", quote="营业收入 100,000,000.00"),
+        _candidate("EV-002", period="2024FY", quote="营业收入 120,000,000.00"),
+        _candidate("EV-003", period="2025FY", quote="营业收入 150,000,000.00"),
+    ]
+    charts = dynamic_qa._build_charts("近三年营业收入趋势如何？", trend)
+    assert len(charts) == 1
+    assert charts[0]["type"] == "line"
+    assert charts[0]["periods"] == ["2023FY", "2024FY", "2025FY"]
+    assert charts[0]["series"][0]["values"] == [1.0, 1.2, 1.5]
+    assert charts[0]["evidence_ids"] == ["EV-001", "EV-002", "EV-003"]
+
+
+def test_latest_metrics_are_split_into_charts_by_unit():
+    latest = [
+        _candidate(
+            "EV-001", metric="total_assets", period="2026H1",
+            quote="资产总计 12,000,000,000.00",
+        ),
+        _candidate(
+            "EV-002", metric="total_liabilities", period="2026H1",
+            quote="负债合计 4,000,000,000.00",
+        ),
+        _candidate(
+            "EV-003", metric="debt_ratio", period="2026H1",
+            quote="资产负债率 33.33%",
+        ),
+    ]
+    charts = dynamic_qa._build_charts("最近一期资产负债情况如何？", latest)
+    assert [chart["type"] for chart in charts] == ["bar", "bar"]
+    assert [chart["unit"] for chart in charts] == ["亿元", "%"]
+    assert charts[0]["evidence_ids"] == ["EV-001", "EV-002"]
+    assert charts[1]["evidence_ids"] == ["EV-003"]
+
+
+def test_net_cash_ratio_is_the_only_supported_derived_number():
+    cash = _candidate(
+        "EV-001",
+        metric="operating_cash_flow",
+        period="2025FY",
+        quote="经营活动产生的现金流量净额 50,000,000.00",
+    )
+    profit = _candidate(
+        "EV-002",
+        metric="net_profit_attr",
+        period="2025FY",
+        quote="归属于上市公司股东的净利润 100,000,000.00",
+    )
+    payload = {
+        "answer": "2025FY 净现比为 0.50（EV-001、EV-002）。",
+        "claims": [
+            {
+                "id": "CL-1",
+                "text": "2025FY 净现比为 0.50（经营现金流净额÷归母净利润）",
+                "evidence_ids": ["EV-001", "EV-002"],
+            }
+        ],
+        "signals": [],
+    }
+    validated, notes = _validate(payload, [cash, profit])
+    assert validated["claims"]
+    assert not any("0.50" in note and "丢弃" in note for note in notes)
+
+
+def test_net_cash_question_has_deterministic_answer_without_model():
+    cash = _candidate(
+        "EV-001", metric="operating_cash_flow", period="2026H1",
+        quote="经营活动产生的现金流量净额（元） 50,000,000.00",
+    )
+    profit = _candidate(
+        "EV-002", metric="net_profit_attr", period="2026H1",
+        quote="归属于上市公司股东的净利润（元） 100,000,000.00",
+    )
+    payload = dynamic_qa._build_net_cash_response(
+        "最近一期净现比是多少？是怎么计算的？", [cash, profit], "600570"
+    )
+    assert payload is not None
+    assert "0.50" in payload["answer"]
+    assert payload["claims"][0]["evidence_ids"] == ["EV-001", "EV-002"]
+    assert {item["id"] for item in payload["evidence"]} == {"EV-001", "EV-002"}
+
+
+def test_share_count_dividend_is_a_verified_controlled_calculation():
+    dividend = _candidate(
+        "EV-001", metric="dividend_history", period="2025FY",
+        quote="向全体股东每10股派发现金红利1.50元（含税）",
+    )
+    claim = dynamic_qa._dividend_calculation_claim(
+        "如果我持有1000股能分到多少？", [dividend]
+    )
+    assert claim is not None
+    assert "1,000股 ÷ 10股 × 1.5元 = 150.00元" in claim["text"]
+    validated, notes = dynamic_qa.validate_dynamic_payload(
+        {"answer": claim["text"], "claims": [claim], "signals": []},
+        [dividend],
+        question="如果我持有1000股能分到多少？",
+        stock_code="300558",
+    )
+    assert validated["claims"]
+    assert validated["evidence"][0]["id"] == "EV-001"
+    assert not any("数字未被" in note for note in notes)
 
 
 def test_answer_with_dropped_evidence_reference_is_rebuilt(candidates):
@@ -647,6 +801,14 @@ def test_metrics_for_question_maps_financial_intents():
         "eps",
     )
     assert de.metrics_for_question("经营现金流表现如何？") == ("operating_cash_flow",)
+    assert de.metrics_for_question("董事会几席？") == ("board_composition",)
+    assert de.metrics_for_question("审计机构是谁？近三年有没有更换？") == ("audit_firm",)
+    assert de.metrics_for_question("员工持股情况如何？") == ("employee_holding_plan",)
+    assert de.metrics_for_question("劳务外包合同金额多少？") == ("labor_outsourcing",)
+    assert de.metrics_for_question("请给最近一期总负债和净资产") == (
+        "total_liabilities",
+        "total_equity",
+    )
     assert de.metrics_for_question("这个公司有什么风险？") == (
         "revenue",
         "net_profit_attr",
@@ -684,6 +846,9 @@ def test_is_in_scope_blocks_non_financial_questions():
     assert not de.is_in_scope("公司食堂的菜好不好吃？")
     assert de.is_in_scope("最近营业收入和归母净利润表现如何？")
     assert de.is_in_scope("这个公司有什么风险？")
+    assert de.is_in_scope("董事会几席？")
+    assert de.is_in_scope("员工持股情况如何？")
+    assert de.is_in_scope("关键审计事项是什么？")
     assert de.is_risk_question("目前最值得关注的风险是什么？")
 
 
@@ -760,6 +925,7 @@ def test_dynamic_call_uses_strict_json_system_prompt(monkeypatch, candidates):
     assert captured["system_prompt_override"] == dynamic_qa.SYSTEM_PROMPT
     assert "S1/S2/S3/S4" not in captured["system_prompt_override"]
     assert captured["thinking"] is False
+    assert captured["json_mode"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -824,6 +990,48 @@ def test_bad_json_degrades_to_insufficient(monkeypatch, candidates, text):
     assert source == dynamic_qa.SOURCE_INSUFFICIENT
     assert payload["answer"] == INSUFFICIENT_ANSWER
     assert payload["evidence"] == []
+
+
+def test_net_cash_question_does_not_depend_on_model(monkeypatch):
+    pair = [
+        _candidate(
+            "EV-001", metric="operating_cash_flow", period="2026H1",
+            quote="经营活动产生的现金流量净额（元） 50,000,000.00",
+        ),
+        _candidate(
+            "EV-002", metric="net_profit_attr", period="2026H1",
+            quote="归属于上市公司股东的净利润（元） 100,000,000.00",
+        ),
+    ]
+    _patch_retrieval(monkeypatch, pair)
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("净现比确定性路径不应调用模型")
+
+    payload, source = dynamic_qa.build_dynamic_response(
+        "600570", "最近一期净现比是多少？是怎么计算的？", llm=_must_not_run
+    )
+    assert source == dynamic_qa.SOURCE_DYNAMIC
+    assert "0.50" in payload["answer"]
+
+
+def test_dividend_calculation_survives_bad_json_without_duplicate(monkeypatch):
+    dividend = _candidate(
+        "EV-001", metric="dividend_history", period="2025FY",
+        quote="向全体股东每10股派发现金红利1.50元（含税）",
+    )
+    _patch_retrieval(monkeypatch, [dividend])
+
+    def _bad(*args, **kwargs):
+        return LLMResult(text="not json", ok=True, source="deepseek", model="m")
+
+    payload, source = dynamic_qa.build_dynamic_response(
+        "300558", "如果我持有1000股能分到多少？", llm=_bad
+    )
+    assert source == dynamic_qa.SOURCE_DYNAMIC
+    assert payload["answer"].count("持股分红估算") == 1
+    assert "150.00元" in payload["answer"]
+    assert payload["evidence"][0]["id"] == "EV-001"
 
 
 def test_out_of_scope_question_never_calls_model(monkeypatch):
@@ -964,7 +1172,7 @@ def test_suggested_questions_are_backend_constants():
 
 
 def test_successful_dynamic_response_shape(monkeypatch, candidates):
-    """一次成功的动态回答：charts=[]、evidence 带核验状态、推荐问题是通用四问。"""
+    """成功回答从最终 Evidence 确定性生成柱状对比图。"""
     _patch_retrieval(monkeypatch, candidates)
 
     def _llm(*args, **kwargs):
@@ -995,7 +1203,9 @@ def test_successful_dynamic_response_shape(monkeypatch, candidates):
         "600570", "最近营业收入和归母净利润表现如何？", llm=_llm
     )
     assert source == dynamic_qa.SOURCE_DYNAMIC
-    assert payload["charts"] == []
+    assert len(payload["charts"]) == 1
+    assert payload["charts"][0]["type"] == "bar"
+    assert set(payload["charts"][0]["evidence_ids"]) == {"EV-001", "EV-002"}
     assert len(payload["claims"]) == 2
     assert {e["id"] for e in payload["evidence"]} == {"EV-001", "EV-002"}
     for ev in payload["evidence"]:

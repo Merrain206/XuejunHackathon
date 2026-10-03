@@ -38,8 +38,8 @@ ALLOWED_CATEGORIES = ("financial", "business", "company")
 #: 前端只接受的 signal type / severity
 ALLOWED_SIGNAL_TYPES = ("divergence", "trend", "attention")
 ALLOWED_SEVERITIES = ("attention", "positive")
-#: 前端只支持折线图
-ALLOWED_CHART_TYPES = ("line",)
+#: 前端支持趋势折线与同周期指标柱状对比
+ALLOWED_CHART_TYPES = ("line", "bar")
 
 #: 响应体顶层必须恰好是这 6 个键
 TOP_LEVEL_KEYS = ("answer", "claims", "signals", "charts", "evidence", "suggested_questions")
@@ -107,9 +107,11 @@ def _iter_references(payload: dict[str, Any]) -> list[tuple[str, str, list[str]]
 #: 量级单位：答案里写「5,400.77 万元」而引文是「54,007,712.64 元」时，
 #: 数字经过换算必然对不上，这类不该当异常报出来。
 _UNIT_SUFFIXES = ("万元", "亿元", "万", "亿", "千元", "年", "月", "日", "页")
+_COUNT_SUFFIXES = ("个平台", "席", "名", "人", "家", "个", "位", "股")
 #: 形如 “5,400.77 万元”“17.70%” 的带单位数值
 _NUMBER_WITH_UNIT_RE = re.compile(
-    r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*(万元|亿元|千元|万|亿|元|%|％|年|月|日|页)?"
+    r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*"
+    r"(万元|亿元|千元|个平台|万|亿|元|%|％|年|月|日|页|席|名|人|家|个|位|股)?"
 )
 
 
@@ -137,7 +139,7 @@ def _extract_key_numbers(text: str) -> set[str]:
         if unit in _UNIT_SUFFIXES:
             continue
 
-        if unit in ("%", "％") or "," in raw or "." in raw:
+        if unit in ("%", "％") or unit in _COUNT_SUFFIXES or "," in raw or "." in raw:
             numbers.add(clean)
     return numbers
 
@@ -310,13 +312,13 @@ def validate_response(payload: Any, *, strict_numbers: bool = True) -> Validatio
                 f"signal {sid} 的 severity={entry.get('severity')!r} 不在 {ALLOWED_SEVERITIES}",
             )
 
-    # ---- chart 结构：type=line、periods 非空、series 与 periods 等长、值有限 ----
+    # ---- chart 结构：type=line/bar、periods 非空、series 与 periods 等长、值有限 ----
     for chart in charts:
         cid = chart.get("id")
         if chart.get("type") not in ALLOWED_CHART_TYPES:
             result.add(
                 "E-CHART-TYPE",
-                f"chart {cid} 的 type={chart.get('type')!r} 必须是 'line'（前端只支持折线图）",
+                f"chart {cid} 的 type={chart.get('type')!r} 不在 {ALLOWED_CHART_TYPES}",
             )
         if not _non_empty_str(chart.get("title")):
             result.add("E-CHART", f"chart {cid} 的 title 不能为空")

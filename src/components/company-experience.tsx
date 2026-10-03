@@ -18,7 +18,7 @@ const loadingSteps = [
 type ReliabilityLevel = "high" | "medium" | "pending";
 type ReliabilityReasonState = "verified" | "neutral" | "warning";
 
-const materialNumberPattern = /[-+]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:%|亿元|万元|元)|\d+\.\d+)/g;
+const materialNumberPattern = /[-+]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:%|亿元|万元|千元|元|个平台|小时|股|席|名|人|家|个|位)|\d+\.\d+)/g;
 
 function parseMaterialNumber(value: string) {
   const numericValue = Number.parseFloat(value.replaceAll(",", ""));
@@ -26,6 +26,7 @@ function parseMaterialNumber(value: string) {
   if (value.includes("%")) return { kind: "percent", value: numericValue };
   if (value.includes("亿元")) return { kind: "amount", value: numericValue * 100_000_000 };
   if (value.includes("万元")) return { kind: "amount", value: numericValue * 10_000 };
+  if (value.includes("千元")) return { kind: "amount", value: numericValue * 1_000 };
   if (value.includes("元")) return { kind: "amount", value: numericValue };
   return { kind: "bare", value: numericValue };
 }
@@ -66,7 +67,7 @@ function EvidenceRichText({ text, evidence, onEvidence }: { text: string; eviden
 }
 
 function FormattedSourceQuote({ text }: { text: string }) {
-  const normalized = text.trim().replace(/\s+/g, " ");
+  const normalized = text.trim().replace(/\s+/g, " ").replace(/\s+(?=(?:单位\s*[:：]|项目\s|交易类别\s|金额\s|原因\s))/g, "\n");
   const matches = Array.from(normalized.matchAll(materialNumberPattern));
   const gaps = matches.slice(1).map((match, index) => {
     const previous = matches[index];
@@ -91,7 +92,20 @@ function FormattedSourceQuote({ text }: { text: string }) {
     );
   }
 
-  return <blockquote className="mt-4 whitespace-pre-line border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">“{normalized}”</blockquote>;
+  if (!matches.length) {
+    return <blockquote className="mt-4 whitespace-pre-line break-words border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">“{normalized}”</blockquote>;
+  }
+
+  const content: ReactNode[] = ["“"];
+  let cursor = 0;
+  matches.forEach((match) => {
+    const start = match.index ?? 0;
+    content.push(normalized.slice(cursor, start));
+    content.push(<span className="rounded-sm bg-teal-50 px-1 font-mono font-semibold text-teal-800" key={`${start}-${match[0]}`}>{match[0]}</span>);
+    cursor = start + match[0].length;
+  });
+  content.push(normalized.slice(cursor), "”");
+  return <blockquote className="mt-4 whitespace-pre-line break-words border-l-2 border-teal-600 pl-4 text-[15px] leading-7 text-slate-700">{content}</blockquote>;
 }
 
 function insufficientReason(sourceMode: AskResponse["sourceMode"], companyId: string) {
@@ -258,6 +272,7 @@ export function CompanyExperience({ company }: { company: Company }) {
   const [dataMode, setDataMode] = useState<AskResponse["sourceMode"] | "pending">("pending");
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState(0);
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
   const [error, setError] = useState("");
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
   const activeRequest = useRef<{ id: number; controller: AbortController } | null>(null);
@@ -269,6 +284,7 @@ export function CompanyExperience({ company }: { company: Company }) {
     setResponse(null);
     setDataMode("pending");
     setLoading(false);
+    setLoadingElapsed(0);
     setError("");
     setSelectedEvidence(null);
     activeRequest.current?.controller.abort();
@@ -283,10 +299,19 @@ export function CompanyExperience({ company }: { company: Company }) {
   useEffect(() => {
     if (!loading) return;
 
+    const startedAt = performance.now();
+    const stageThresholds = [0, 800, 2500, 6000, 11000];
     setLoadingStage(0);
+    setLoadingElapsed(0);
     const interval = window.setInterval(() => {
-      setLoadingStage((current) => Math.min(current + 1, loadingSteps.length - 1));
-    }, 560);
+      const elapsed = performance.now() - startedAt;
+      setLoadingElapsed(elapsed);
+      let nextStage = 0;
+      stageThresholds.forEach((threshold, index) => {
+        if (elapsed >= threshold) nextStage = index;
+      });
+      setLoadingStage(nextStage);
+    }, 200);
 
     return () => window.clearInterval(interval);
   }, [loading]);
@@ -385,7 +410,7 @@ export function CompanyExperience({ company }: { company: Company }) {
                 <div className="min-w-0 flex-1">
                   <p className="eyebrow">Investigation progress</p>
                   <p className="loading-title mt-2 text-base font-semibold">{loadingSteps[loadingStage].title}</p>
-                  <p className="mt-1 text-xs text-slate-500">{loadingSteps[loadingStage].detail}</p>
+                  <p className="mt-1 text-xs text-slate-500">{loadingSteps[loadingStage].detail} · 已等待 {(loadingElapsed / 1000).toFixed(1)} 秒</p>
                   <ol className="mt-6 grid gap-3 border-t border-slate-200 pt-5 sm:grid-cols-5">
                     {loadingSteps.map((step, index) => <li className={`progress-step ${index < loadingStage ? "is-done" : ""} ${index === loadingStage ? "is-active" : ""}`} key={step.title}>
                       <span className="progress-dot">{index < loadingStage ? "✓" : String(index + 1).padStart(2, "0")}</span>

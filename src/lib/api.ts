@@ -19,7 +19,7 @@ type AskApiResponse = {
   }>;
   charts?: Array<{
     id: string;
-    type: "line";
+    type: "line" | "bar";
     title: string;
     subtitle?: string;
     unit: string;
@@ -95,7 +95,7 @@ function isChart(value: unknown): value is NonNullable<AskApiResponse["charts"]>
   const series = value.series;
 
   if (!isNonEmptyString(value.id)
-    || value.type !== "line"
+    || !["line", "bar"].includes(value.type as string)
     || !isNonEmptyString(value.title)
     || !isOptionalString(value.subtitle)
     || typeof value.unit !== "string"

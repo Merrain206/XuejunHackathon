@@ -1,6 +1,6 @@
 # Ask the Company
 
-面向思看科技（688583）、恒生电子（600570）、中国长城（000066）和贝达药业（300558）的可验证企业问答 Demo。仓库包含 Next.js 前端、FastAPI 后端和 SQLite 数据管道。思看科技默认使用经公开招股书和 2025 年半年度报告核验的 Mock Evidence；其余公司依赖动态 Evidence 服务，不会降级到思看科技演示数据。
+面向思看科技（688583）、恒生电子（600570）、中国长城（000066）和贝达药业（300558）的可验证企业问答 Demo。仓库包含 Next.js 前端、FastAPI 后端和 SQLite 数据管道。思看科技默认使用经公开招股书和 2025 年半年度报告核验的 Mock Evidence；其余公司依赖动态 Evidence 服务，不会降级到思看科技演示数据。动态问答覆盖财务、治理、审计、股东回报、员工与激励、供应链、关联关系、研发和风险等普通投资者主题。
 
 ## 本地运行
 
@@ -79,7 +79,7 @@ Content-Type: application/json
 }
 ```
 
-所有 Claim 和 Signal 必须包含至少一个真实 `evidence_id`。`source_url` 返回裸 PDF 地址，前端根据 `source_page` 统一追加页码锚点。没有足够证据时，后端应返回空数组和固定兜底回答。
+所有 Claim、Signal 和 Chart 必须包含真实 `evidence_id`。动态折线图/柱状图由后端从最终通过校验的 Evidence 确定性构建，一个复合问题最多返回 3 张图；模型不直接生成图表数据。`source_url` 返回裸 PDF 地址，前端根据 `source_page` 统一追加页码锚点。没有足够证据时，后端应返回空数组和固定兜底回答。
 
 前端通过 `sourceMode` 区分四种数据状态：`api`（真实后端）、`mock`（思看科技未配置后端时的演示数据）、`fallback`（思看科技后端异常后的已核验降级数据）和 `unavailable`（其他公司动态证据服务不可用）。`sourceMode` 是前端适配层字段，不要求后端返回。
 
@@ -90,7 +90,7 @@ Content-Type: application/json
 - 目前最值得关注的风险是什么？
 - 你的员工喜欢吃水果吗？（用于演示证据不足）
 
-完整交接说明见 [`docs/HANDOFF.md`](docs/HANDOFF.md)。
+完整交接说明见 [`docs/HANDOFF.md`](docs/HANDOFF.md)，普通投资者 Evidence 扩展范围与缺口见 [`docs/INVESTOR_EVIDENCE_EXPANSION.md`](docs/INVESTOR_EVIDENCE_EXPANSION.md)。
 
 ## 验证
 

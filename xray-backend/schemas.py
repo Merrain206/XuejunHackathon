@@ -57,7 +57,7 @@ SEVERITY_MAP: dict[str, str] = {
 }
 
 #: 前端只支持折线图（api.ts 里写死 `type !== "line"` 即判不合法）
-ChartKind = Literal["line"]
+ChartKind = Literal["line", "bar"]
 
 #: 证据类别 —— 前端校验器只接受这三个值
 EvidenceCategory = Literal["financial", "business", "company"]

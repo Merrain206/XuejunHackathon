@@ -950,11 +950,13 @@ def document_page_text(document_id: int, page_number: int) -> str:
         raise ValueError("page_number 必须 >= 1")
 
     chunk_text = get_page_text(document_id, page_number)
-    if chunk_text.strip():
-        return chunk_text
-
     body = documents_text([document_id]).get(document_id, "")
-    return page_text_from_body(body, page_number)
+    marker_text = page_text_from_body(body, page_number)
+    if chunk_text.strip() and marker_text.strip():
+        # chunks 与全文页标记来自不同解析器，换行和表格顺序可能不同。两者都是
+        # 同一 PDF 同一页的原文；合并后允许 Evidence 在任一路径中逐字核对。
+        return f"{chunk_text}\n{marker_text}"
+    return chunk_text or marker_text
 
 
 def page_from_markers(document_id: int, needle: str, *, limit: int = 20) -> list[int]:

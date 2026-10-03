@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import * as echarts from "echarts/core";
-import { LineChart } from "echarts/charts";
+import { BarChart, LineChart } from "echarts/charts";
 import {
   GridComponent,
   LegendComponent,
@@ -11,7 +11,7 @@ import {
 import { CanvasRenderer } from "echarts/renderers";
 import type { ChartSpec } from "@/lib/types";
 
-echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 export function EvidenceChart({ chart }: { chart: ChartSpec }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,7 +44,7 @@ export function EvidenceChart({ chart }: { chart: ChartSpec }) {
       grid: { top: 54, right: 22, bottom: 28, left: 42 },
       xAxis: {
         type: "category",
-        boundaryGap: false,
+        boundaryGap: chart.type === "bar",
         data: chart.periods,
         axisLine: { lineStyle: { color: "#cdd7d3" } },
         axisTick: { show: false },
@@ -59,18 +59,20 @@ export function EvidenceChart({ chart }: { chart: ChartSpec }) {
       },
       series: chart.series.map((series, index) => ({
         name: series.name,
-        type: "line",
+        type: chart.type,
         data: series.values,
-        smooth: 0.4,
+        smooth: chart.type === "line" ? 0.4 : undefined,
         symbol: "circle",
         symbolSize: 8,
         lineStyle: { width: 3 },
-        areaStyle: {
+        itemStyle: chart.type === "bar" ? { borderRadius: [4, 4, 0, 0] } : undefined,
+        barMaxWidth: chart.type === "bar" ? 56 : undefined,
+        areaStyle: chart.type === "line" ? {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: index === 0 ? "rgba(18, 60, 58, 0.18)" : "rgba(211, 154, 45, 0.18)" },
             { offset: 1, color: "rgba(255, 255, 255, 0)" },
           ]),
-        },
+        } : undefined,
         emphasis: { focus: "series" },
         label: {
           show: true,

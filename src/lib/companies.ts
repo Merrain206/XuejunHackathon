@@ -27,8 +27,13 @@ export const demoSuggestedQuestions = [
 
 export const generalSuggestedQuestions = [
   "最近营业收入和归母净利润表现如何？",
-  "经营现金流表现如何？",
-  "近几个报告期的盈利趋势是什么？",
+  "最近一期总资产、总负债、净资产和资产负债率是多少？",
+  "董事会构成和中小股东制衡机制如何？",
+  "审计意见、审计机构和关键审计事项是什么？",
+  "历史分红、股份回购和未来分红政策如何？",
+  "员工持股和股权激励情况如何？",
+  "目前有哪些可观察的风险信号？",
+  "你的员工喜欢吃水果吗？",
 ];
 
 export const companies: Company[] = [
@@ -61,7 +66,7 @@ export const companies: Company[] = [
     metrics: [
       { label: "公告状态", value: "已收录", note: "数据库" },
       { label: "Evidence", value: "可用", note: "可追溯" },
-      { label: "问答方式", value: "动态提问", note: "金融问题" },
+      { label: "问答方式", value: "动态提问", note: "公告问答" },
     ],
     suggestedQuestions: generalSuggestedQuestions,
   },
@@ -77,7 +82,7 @@ export const companies: Company[] = [
     metrics: [
       { label: "公告状态", value: "已收录", note: "数据库" },
       { label: "Evidence", value: "可用", note: "可追溯" },
-      { label: "问答方式", value: "动态提问", note: "金融问题" },
+      { label: "问答方式", value: "动态提问", note: "公告问答" },
     ],
     suggestedQuestions: generalSuggestedQuestions,
   },
@@ -93,7 +98,7 @@ export const companies: Company[] = [
     metrics: [
       { label: "公告状态", value: "已收录", note: "数据库" },
       { label: "Evidence", value: "可用", note: "可追溯" },
-      { label: "问答方式", value: "动态提问", note: "金融问题" },
+      { label: "问答方式", value: "动态提问", note: "公告问答" },
     ],
     suggestedQuestions: generalSuggestedQuestions,
   },

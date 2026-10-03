@@ -27,7 +27,7 @@ export type Signal = {
 
 export type ChartSpec = {
   id: string;
-  type: "line";
+  type: "line" | "bar";
   title: string;
   subtitle: string;
   unit: string;

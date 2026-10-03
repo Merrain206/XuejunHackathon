@@ -16,12 +16,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 写 Next.js 代码前，先读取 `node_modules/next/dist/docs/` 中与改动相关的本地文档。
 - 前端与后端只通过 `POST /companies/{id}/ask` 的结构化 JSON 契约耦合；snake_case 到前端 camelCase 的转换集中放在 `src/lib/api.ts`。
 - `NEXT_PUBLIC_API_BASE_URL` 未配置时使用 Mock；后端超时、HTTP 错误或解析失败时必须自动降级为已核验演示数据，不能破坏 Demo。
-- 思看科技 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险；另有第四问「你的员工喜欢吃水果吗？」用于演示证据不足。其他公司允许基于 SQLite Evidence + LLM 回答未预设金融问题，也允许基于财务 Evidence 总结可观察的风险信号，但不得声称覆盖全部经营、法律、行业或合规风险；所有动态回答同样必须通过 Evidence 校验，第一版可以不含图表。
+- 思看科技 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险；另有第四问「你的员工喜欢吃水果吗？」用于演示证据不足。其他公司允许基于 SQLite Evidence + LLM 回答未预设的普通投资者问题，也允许基于 Evidence 总结可观察的风险信号，但不得声称覆盖全部经营、法律、行业或合规风险；所有动态回答同样必须通过 Evidence 校验。
+- 动态图表由后端根据最终通过校验的 Evidence 确定性构建，不接受模型直接生成图表数据。当前支持折线图和柱状图；一个问题可按单位和指标拆成最多 3 张图，图中每个数值都必须能追溯到图表自己的 `evidence_ids`。
 - Evidence 页码使用 PDF 查看器页码，且必须与引用的 PDF 版本配套（两份 PDF 的页码不可混用）：招股说明书（注册稿，506 页）第 **321、322、324** 页；2025 半年报（269 页）第 **2、8、9、43** 页。核验记录见 `docs/HANDOFF.md` 第 4.1 节。
 - 后端 `source_url` 只返回不带 fragment 的原始 PDF URL，页码通过 `source_page` 独立返回；前端负责追加 `#page=N`，禁止前后端重复追加。
-- 思看科技 `suggested_questions` 保持原四条和固定顺序；其他公司可以使用已确认的通用财务问题，但不得由模型自由生成或推荐无证据覆盖的问题。
+- 思看科技 `suggested_questions` 保持原四条和固定顺序；其他公司使用代码中已确认的普通投资者问题，不得由模型自由生成或推荐无证据覆盖的问题。
 - 非思看公司的 API 失败时不得降级到思看科技 Mock；只能显示证据不足或服务不可用，避免跨公司事实污染。
 - 三条并行任务书见 `docs/TONIGHT_FRONTEND_TASKS.md`、`docs/TONIGHT_BACKEND_TASKS.md`、`docs/TONIGHT_DATABASE_TASKS.md`；实现状态以 `docs/HANDOFF.md` 为准，不得把任务书目标直接描述成已完成功能。
 - 数据库与动态后端合并后的收口要求见 `docs/SUPPLEMENTAL_DATABASE_BACKEND_TASKS.md`：后端必须过滤 `evidence.excluded=1`，Claim/Signal 的数字只能由其自身引用的 Evidence 支撑，不能用全部候选语料交叉兜底。
+- 普通投资者 Evidence 扩展状态见 `docs/INVESTOR_EVIDENCE_EXPANSION.md`。当前候选库为 `cninfo.multicompany.expanded.v2.db`，不能自动替换稳定 `cninfo.db`；所有 `.db` 文件都不得提交。
 - V0.2 的夜间更新、Snapshot、维护模式是目标架构，目前尚未在此前端实现；不要把规划写成已完成功能。
 - 交接现状、运行方法、关键文件和后续事项见 `docs/HANDOFF.md`。

@@ -6,7 +6,7 @@
 
     1. 思看科技三条稳定问题 → `demo_handlers`（确定性、毫秒级，不碰模型）
     2. 明确证据不足 / 不在覆盖面内的问题（如「员工喜欢吃水果」）→ 固定兜底，**不调模型**
-    3. 其他公司、其他金融问题 → **本模块**
+    3. 其他公司、其他普通投资者问题 → **本模块**
     4. 本模块任一环节失败 → 固定兜底（HTTP 仍 200）
 
 流程（先检索、再让模型组织、最后机械校验）
@@ -17,7 +17,7 @@
       → llm_client.generate_answer()            ← 复用同一个 SDK，不引入第二套
       → 解析 JSON（最多一次轻量修复）
       → 机械校验（悬空 id / 无证据条目 / 数字不在引文里）
-      → 组装响应（charts 固定 []）
+      → 依据最终引用 Evidence 确定性构建 0~3 张图
 
 模型**没有**生成 evidence 的能力：`evidence` 数组完全由候选集合决定，
 模型只输出 `answer` / `claims` / `signals`。它给不出合法的 evidence_ids
@@ -52,8 +52,44 @@ logger = logging.getLogger(__name__)
 SOURCE_DYNAMIC = "dynamic-llm"
 SOURCE_INSUFFICIENT = "insufficient"
 
-#: 允许的 chart 类型（P0 固定为空数组，这里留常量是为了将来收敛时不必改校验）
-_ALLOWED_CHART_TYPES = ("line",)
+#: 后端确定性生成的 chart 类型；模型输出的 charts 一律不采信。
+_ALLOWED_CHART_TYPES = ("line", "bar")
+
+_MONEY_METRICS = {
+    "revenue",
+    "net_profit",
+    "net_profit_attr",
+    "net_profit_deducted",
+    "operating_cash_flow",
+    "total_assets",
+    "total_liabilities",
+    "total_equity",
+    "equity_attr",
+    "accounts_receivable",
+    "inventory",
+    "rd_expense",
+    "rd_investment",
+}
+_RATIO_METRICS = {"debt_ratio", "gross_margin", "rd_ratio"}
+_CHART_LABELS = {
+    "revenue": "营业收入",
+    "net_profit": "净利润",
+    "net_profit_attr": "归母净利润",
+    "net_profit_deducted": "扣非归母净利润",
+    "operating_cash_flow": "经营现金流净额",
+    "total_assets": "总资产",
+    "total_liabilities": "总负债",
+    "total_equity": "净资产",
+    "equity_attr": "归母净资产",
+    "accounts_receivable": "应收账款",
+    "inventory": "存货",
+    "rd_expense": "研发费用",
+    "rd_investment": "研发投入",
+    "debt_ratio": "资产负债率",
+    "gross_margin": "毛利率",
+    "rd_ratio": "研发投入占比",
+    "eps": "每股收益",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +112,12 @@ SYSTEM_PROMPT = """你是严谨的上市公司公开信息分析助手。
    不许自己发明 id，不许引用候选之外的任何来源。
 3. 找不到足够依据时，把 answer 写成「根据目前掌握的信息，我无法可靠回答这个问题。」，
    并让 claims 与 signals 都返回空数组 []。**绝对不许编造结论来凑数。**
-4. answer 与每条 claim 里出现的金额、比例，必须能在你引用的候选证据原文摘录里
-   逐字找到（可以换单位描述，但数字本身不要改、不要自己推算新数字）。
+4. answer 与每条 claim 里出现的金额、比例、人数、席位等数字，必须能在你引用的
+   候选证据原文摘录里逐字找到（可以换单位描述，但数字本身不要改、不要自己推算）。
+   人名、机构名、平台名、审计意见等定性事实也必须由该条引用原文直接支持。
+   允许两类受控派生计算：用户明确询问“净现比”时，用同一报告期经营现金流净额÷归母
+   净利润；用户给出持股数并询问分红时，用持股数÷方案基数股数×每基数股现金红利。
+   两者都必须在 claim 中写明公式并引用完整输入 Evidence，不得做其它推算。
 5. 不要做投资建议，不要预测股价，不要评价管理层人品。
 
 【输出格式（严格遵守，字段名一个字都不能改）】
@@ -127,7 +167,9 @@ def build_user_prompt(question: str, candidates: Sequence[Candidate], stock_code
         f"{risk_scope}\n"
         f"【候选证据】（只能引用这些 id）\n"
         f"{render_candidates_for_prompt(candidates)}\n\n"
-        f"请基于以上候选证据回答问题。若证据不足，按规则 3 返回兜底 JSON。"
+        f"请基于以上候选证据回答问题。复合问题中若只有部分子问题有证据，必须先回答"
+        f"有证据的部分并为其生成 claims，再明确说明其余部分证据不足；不要因为一个子问题"
+        f"缺证据就放弃整道问题。只有所有子问题都没有证据时才按规则 3 返回兜底 JSON。"
         f"{_JSON_REMINDER}"
     )
 
@@ -491,11 +533,9 @@ def validate_dynamic_payload(
     # Answer 没有独立的 evidence_ids，只能使用最终返回的 Evidence 数字并集。
     # 若模型 Answer 带入了其它候选或编造数字，用已经逐条核验的 Claim 重建；
     # 没有 Claim 可以重建时，整次拒答。
-    corpus = _quote_corpus([
-        {"source_quote": c.raw_quote or c.display_quote or c.source_quote}
-        for c in selected
-    ])
-    missing_answer = _numbers_supported(answer, corpus)
+    # Answer 与 Claim 使用同一套受控派生校验；否则合法的净现比/持股分红公式
+    # 会在最后一步被误判为“数字不在原文”，再无意义地从 Claim 重建一遍。
+    missing_answer = _numbers_unsupported_by_references(answer, list(active_ids), by_id)
     dangling_answer_refs = sorted(set(_EVIDENCE_REF_RE.findall(answer)) - active_ids)
     if missing_answer or dangling_answer_refs:
         if missing_answer:
@@ -512,7 +552,7 @@ def validate_dynamic_payload(
             "answer": answer,
             "claims": claims,
             "signals": signals,
-            "charts": [],
+            "charts": _build_charts(question, selected),
             "evidence": [_normalize_evidence(c) for c in selected],
             "suggested_questions": suggested_questions_for(question, stock_code=stock_code),
         },
@@ -522,6 +562,107 @@ def validate_dynamic_payload(
 
 def _drop_dangling(entry: dict[str, Any], kept: set[str]) -> dict[str, Any]:
     return {**entry, "evidence_ids": [i for i in entry["evidence_ids"] if i in kept]}
+
+
+def _candidate_chart_value(candidate: Candidate) -> tuple[float, str] | None:
+    """从已核验原文的首个数据值生成图表值；不做同比或其它推算。"""
+    raw = candidate.lead_value()
+    if not raw:
+        return None
+    try:
+        value = float(raw.replace(",", "").rstrip("%％"))
+    except ValueError:
+        return None
+    quote = candidate.raw_quote or candidate.source_quote
+    unit = candidate.unit.strip()
+    if candidate.metric in _RATIO_METRICS or raw.endswith(("%", "％")) or unit in ("%", "％"):
+        return round(value, 4), "%"
+    if candidate.metric == "eps" or "元/股" in unit or "元／股" in unit:
+        return round(value, 4), "元/股"
+    if candidate.metric not in _MONEY_METRICS:
+        return None
+    if "亿元" in unit or "亿元" in quote:
+        scaled = value
+    elif "万元" in unit or "万元" in quote:
+        scaled = value / 10_000
+    elif "千元" in unit or "千元" in quote:
+        scaled = value / 100_000
+    else:
+        scaled = value / 100_000_000
+    return round(scaled, 4), "亿元"
+
+
+def _build_charts(question: str, candidates: Sequence[Candidate]) -> list[dict[str, Any]]:
+    """按问题形态确定性生成 0~3 张图，所有点都来自最终返回的 Evidence。"""
+    points: dict[str, list[tuple[Candidate, float, str]]] = {}
+    for candidate in candidates:
+        parsed = _candidate_chart_value(candidate)
+        if parsed is None:
+            continue
+        value, unit = parsed
+        points.setdefault(candidate.metric, []).append((candidate, value, unit))
+    if not points:
+        return []
+
+    wants_trend = any(word in question for word in ("趋势", "近三年", "历年", "历史", "走势", "变化"))
+    charts: list[dict[str, Any]] = []
+    if wants_trend:
+        for metric, items in points.items():
+            unique: dict[str, tuple[Candidate, float, str]] = {}
+            for item in items:
+                unique.setdefault(item[0].period, item)
+            ordered = sorted(unique.values(), key=lambda item: _chart_period_key(item[0].period))
+            if len(ordered) < 2:
+                continue
+            label = _CHART_LABELS.get(metric, metric)
+            charts.append({
+                "id": f"CHART-DYN-{len(charts) + 1:03d}",
+                "type": "line",
+                "title": f"{label}趋势",
+                "subtitle": "数值直接取自所引公告原文",
+                "unit": ordered[0][2],
+                "periods": [item[0].period for item in ordered],
+                "series": [{"name": label, "values": [item[1] for item in ordered]}],
+                "evidence_ids": [item[0].id for item in ordered],
+            })
+            if len(charts) >= 3:
+                return charts
+        if charts:
+            return charts
+
+    latest_by_metric: dict[str, tuple[Candidate, float, str]] = {}
+    for metric, items in points.items():
+        latest_by_metric[metric] = max(items, key=lambda item: _chart_period_key(item[0].period))
+    multi_metric = len(latest_by_metric) >= 2
+    for unit in ("亿元", "%", "元/股"):
+        group = [(metric, item) for metric, item in latest_by_metric.items() if item[2] == unit]
+        if not group or (len(group) < 2 and not multi_metric):
+            continue
+        charts.append({
+            "id": f"CHART-DYN-{len(charts) + 1:03d}",
+            "type": "bar",
+            "title": "最近披露指标对比",
+            "subtitle": "不同报告期时以各指标最近可用披露为准",
+            "unit": unit,
+            "periods": [_CHART_LABELS.get(metric, metric) for metric, _ in group],
+            "series": [{"name": "最近披露值", "values": [item[1] for _, item in group]}],
+            "evidence_ids": [item[0].id for _, item in group],
+        })
+        if len(charts) >= 3:
+            break
+    return charts
+
+
+def _chart_period_key(period: str) -> tuple[int, int, int]:
+    text = str(period or "").upper()
+    year = re.search(r"(20\d{2})", text)
+    y = int(year.group(1)) if year else 0
+    if "FY" in text or re.fullmatch(r"20\d{2}", text):
+        return y, 4, 0
+    if "H1" in text or "半年" in text:
+        return y, 3, 0
+    quarter = re.search(r"Q([1-4])", text)
+    return (y, 2, int(quarter.group(1))) if quarter else (y, 1, 0)
 
 
 #: 模型明确表示"答不了"的说法。出现这些词时**不做** prose→claim 转换：
@@ -556,7 +697,164 @@ def _numbers_unsupported_by_references(
         {"source_quote": c.raw_quote or c.display_quote or c.source_quote}
         for c in referenced
     ])
-    return _numbers_supported(text, corpus)
+    missing = _numbers_supported(text, corpus)
+    if missing and "净现比" in text:
+        derived = _net_cash_ratios(referenced)
+        remaining: list[str] = []
+        for number in missing:
+            try:
+                value = float(number)
+            except ValueError:
+                remaining.append(number)
+                continue
+            if any(abs(value - ratio) <= 0.02 or abs(value - ratio * 100) <= 0.2 for ratio in derived):
+                continue
+            remaining.append(number)
+        return remaining
+    if missing and "持股分红估算" in text:
+        allowed = _validated_dividend_formula_numbers(text, referenced)
+        if allowed:
+            return [number for number in missing if number not in allowed]
+    return missing
+
+
+def _net_cash_ratios(candidates: Sequence[Candidate]) -> list[float]:
+    """同报告期经营现金流净额÷归母净利润；仅供“净现比”严格校验。"""
+    cash: dict[str, float] = {}
+    profit: dict[str, float] = {}
+    for candidate in candidates:
+        raw = candidate.lead_value()
+        if not raw:
+            continue
+        try:
+            value = float(raw.replace(",", "").rstrip("%％"))
+        except ValueError:
+            continue
+        if candidate.metric == "operating_cash_flow":
+            cash[candidate.period] = value
+        elif candidate.metric in ("net_profit_attr", "net_profit"):
+            profit.setdefault(candidate.period, value)
+    return [cash[period] / value for period, value in profit.items() if period in cash and value]
+
+
+_DIVIDEND_RATE_RE = re.compile(
+    r"每\s*(?P<base>\d*(?:\.\d+)?)\s*股.{0,60}?"
+    r"(?:派发?|分配)[^0-9]{0,20}?(?P<rate>\d+(?:\.\d+)?)\s*元",
+    re.S,
+)
+_SHARE_COUNT_RE = re.compile(r"(?:持有|有)\s*(?P<shares>\d[\d,]*)\s*股")
+_DIVIDEND_FORMULA_RE = re.compile(
+    r"持股分红估算：(?P<shares>[\d,]+)股\s*÷\s*(?P<base>\d+(?:\.\d+)?)股"
+    r"\s*×\s*(?P<rate>\d+(?:\.\d+)?)元\s*=\s*(?P<total>\d+(?:\.\d+)?)元"
+)
+
+
+def _dividend_rates(candidates: Sequence[Candidate]) -> list[tuple[Candidate, float, float]]:
+    rates: list[tuple[Candidate, float, float]] = []
+    for candidate in candidates:
+        if candidate.metric not in ("dividend_history", "dividend_per_share", "dividend_policy"):
+            continue
+        corpus = "\n".join(filter(None, (
+            candidate.raw_quote, candidate.display_quote, candidate.source_quote
+        )))
+        match = _DIVIDEND_RATE_RE.search(corpus)
+        if match:
+            rates.append((candidate, float(match.group("base") or "1"), float(match.group("rate"))))
+    return rates
+
+
+def _dividend_calculation_claim(
+    question: str, candidates: Sequence[Candidate]
+) -> dict[str, Any] | None:
+    shares_match = _SHARE_COUNT_RE.search(question)
+    rates = _dividend_rates(candidates)
+    if not shares_match or not rates:
+        return None
+    shares = int(shares_match.group("shares").replace(",", ""))
+    latest_period = max(_chart_period_key(candidate.period) for candidate, _, _ in rates)
+    candidate, base, rate = next(
+        item for item in rates if _chart_period_key(item[0].period) == latest_period
+    )
+    if shares <= 0 or base <= 0:
+        return None
+    total = shares / base * rate
+    return {
+        "id": "CL-CALC-DIVIDEND",
+        "text": (
+            f"持股分红估算：{shares:,}股 ÷ {base:g}股 × {rate:g}元 = {total:.2f}元"
+            f"（按{candidate.period}披露方案、含税口径；实际以股权登记日持股和最终实施结果为准）"
+        ),
+        "evidence_ids": [candidate.id],
+    }
+
+
+def _validated_dividend_formula_numbers(
+    text: str, candidates: Sequence[Candidate]
+) -> set[str]:
+    match = _DIVIDEND_FORMULA_RE.search(text)
+    if not match:
+        return set()
+    shares = float(match.group("shares").replace(",", ""))
+    base = float(match.group("base"))
+    rate = float(match.group("rate"))
+    total = float(match.group("total"))
+    if base <= 0 or abs(shares / base * rate - total) > 0.011:
+        return set()
+    if not any(abs(base - found_base) < 1e-9 and abs(rate - found_rate) < 1e-9
+               for _, found_base, found_rate in _dividend_rates(candidates)):
+        return set()
+    return {
+        match.group("shares").replace(",", ""),
+        match.group("base"),
+        match.group("rate"),
+        match.group("total"),
+    }
+
+
+def _build_net_cash_response(
+    question: str, candidates: Sequence[Candidate], stock_code: str
+) -> dict[str, Any] | None:
+    if "净现比" not in question:
+        return None
+    cash = {c.period: c for c in candidates if c.metric == "operating_cash_flow" and c.lead_value()}
+    profits: dict[str, Candidate] = {}
+    for candidate in candidates:
+        if candidate.metric == "net_profit_attr" and candidate.lead_value():
+            profits[candidate.period] = candidate
+    for candidate in candidates:
+        if candidate.metric == "net_profit" and candidate.lead_value():
+            profits.setdefault(candidate.period, candidate)
+    periods = sorted(set(cash) & set(profits), key=_chart_period_key, reverse=True)
+    if not periods:
+        return None
+    period = periods[0]
+    cash_candidate, profit_candidate = cash[period], profits[period]
+    try:
+        cash_value = float(cash_candidate.lead_value().replace(",", "").rstrip("%％"))
+        profit_value = float(profit_candidate.lead_value().replace(",", "").rstrip("%％"))
+    except ValueError:
+        return None
+    if not profit_value:
+        return None
+    ratio = cash_value / profit_value
+    ids = [cash_candidate.id, profit_candidate.id]
+    claim = {
+        "id": "CL-CALC-NET-CASH",
+        "text": (
+            f"{period}净现比约为{ratio:.2f}，计算式为经营现金流净额"
+            f"{cash_candidate.lead_value()} ÷ 归母净利润{profit_candidate.lead_value()}"
+        ),
+        "evidence_ids": ids,
+    }
+    selected = [cash_candidate, profit_candidate]
+    return {
+        "answer": f"根据同一报告期披露数据，{claim['text']}（{ids[0]}、{ids[1]}）。",
+        "claims": [claim],
+        "signals": [],
+        "charts": _build_charts(question, selected),
+        "evidence": [_normalize_evidence(candidate) for candidate in selected],
+        "suggested_questions": suggested_questions_for(question, stock_code=stock_code),
+    }
 
 
 def _is_insufficient_answer(answer: str) -> bool:
@@ -726,6 +1024,13 @@ def build_dynamic_response(
         logger.info("公司 %s 没有可用候选证据，返回固定兜底", code)
         return _with_questions(build_insufficient_response(), code), SOURCE_INSUFFICIENT
 
+    # 简单派生指标走确定性路径，避免模型有时明明拿到了同期间两项数据却仍拒答。
+    net_cash_response = _build_net_cash_response(question, candidates, code)
+    if net_cash_response is not None:
+        return net_cash_response, SOURCE_DYNAMIC
+
+    dividend_claim = _dividend_calculation_claim(question, candidates)
+
     prompt = build_user_prompt(question, candidates, code)
     call = llm or generate_answer
     result: LLMResult = call(
@@ -735,22 +1040,53 @@ def build_dynamic_response(
         prompt_override=prompt,
         system_prompt_override=SYSTEM_PROMPT,
         thinking=False,
+        json_mode=True,
     )
 
-    if not result.ok:
+    if not result.ok and dividend_claim is None:
         logger.warning(
             "动态问答降级：模型不可用（%s）company=%s", result.fallback_reason, code
         )
         return _with_questions(build_insufficient_response(), code), SOURCE_INSUFFICIENT
-
-    payload = parse_llm_json(result.text)
-    if payload is None:
-        logger.warning("动态问答降级：模型输出不是合法 JSON（前 120 字：%r）", result.text[:120])
+    payload = parse_llm_json(result.text) if result.ok else None
+    if payload is None and dividend_claim is None:
+        logger.warning(
+            "动态问答降级：模型输出不是合法 JSON（长度=%d 前=%r 后=%r usage=%s）",
+            len(result.text),
+            result.text[:120],
+            result.text[-120:],
+            result.usage,
+        )
         return _with_questions(build_insufficient_response(), code), SOURCE_INSUFFICIENT
+
+    if payload is None:
+        payload = {"answer": "", "claims": [], "signals": []}
+    if dividend_claim is not None:
+        raw_claims = payload.get("claims") if isinstance(payload.get("claims"), list) else []
+        payload["claims"] = [dividend_claim, *raw_claims]
+        current_answer = str(payload.get("answer") or "").strip()
+        payload["answer"] = (
+            dividend_claim["text"]
+            if not current_answer or current_answer == INSUFFICIENT_ANSWER
+            else current_answer
+            if dividend_claim["text"] in current_answer
+            else f"{current_answer.rstrip('。')}。{dividend_claim['text']}。"
+        )
 
     validated, notes = validate_dynamic_payload(
         payload, candidates, question=question, stock_code=code
     )
+
+    if (
+        dividend_claim is None
+        and _SHARE_COUNT_RE.search(question)
+        and validated["answer"].strip() != INSUFFICIENT_ANSWER
+    ):
+        validated["answer"] = (
+            f"{validated['answer'].rstrip('。')}。"
+            "关于你给出的持股数量，当前引用证据没有完整披露可用于换算的"
+            "每股或每若干股现金红利，因此不能可靠计算对应金额。"
+        )
 
     for note in notes:
         logger.info("动态回答校验：%s", note)

@@ -56,6 +56,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import db
 from config import settings
+from investor_topics import (
+    METRIC_LABELS as INVESTOR_METRIC_LABELS,
+    QUESTION_RULES as INVESTOR_QUESTION_RULES,
+    TOPIC_BY_METRIC,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +121,7 @@ METRIC_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("rd_ratio", "rd_investment", "rd_expense"),
     ),
     (
-        ("营收", "收入", "营业额", "营业收入", "卖了多少", "规模"),
+        ("营收", "收入", "营业额", "营业收入", "卖了多少"),
         ("revenue",),
     ),
     (
@@ -130,7 +135,7 @@ METRIC_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         # 净资产/股东权益必须排在净利润规则**之前**：
         # 「归母净资产」同时含「归母」，而「归母」在净利润规则里是关键词，
         # 顺序写反会把问净资产的问题判成净利润问题。
-        ("净资产", "股东权益"),
+        ("归母净资产", "归属于上市公司股东的净资产", "归母股东权益"),
         ("equity_attr", "total_assets"),
     ),
     (
@@ -158,15 +163,19 @@ METRIC_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("operating_cash_flow",),
     ),
     (
+        ("净现比", "净利润现金含量", "利润现金保障"),
+        ("operating_cash_flow", "net_profit_attr", "net_profit"),
+    ),
+    (
         ("毛利", "盈利质量"),
         ("gross_margin", "net_profit_attr", "revenue"),
     ),
     (
-        ("资产负债率", "负债率", "负债"),
+        ("资产负债率", "负债率", "杠杆率"),
         ("debt_ratio", "total_assets", "equity_attr"),
     ),
     (
-        ("资产", "规模"),
+        ("总资产", "资产规模", "一共有多少资产"),
         ("total_assets", "equity_attr"),
     ),
     (
@@ -181,7 +190,7 @@ METRIC_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("存货", "库存", "备货"),
         ("inventory",),
     ),
-)
+) + INVESTOR_QUESTION_RULES
 
 #: 结构化财务问题的兜底指标顺序（识别不出关键词时用）
 DEFAULT_METRICS: tuple[str, ...] = ("revenue", "net_profit_attr", "operating_cash_flow")
@@ -225,6 +234,7 @@ class Candidate:
     verified_tokens: tuple[str, ...] = field(default_factory=tuple)
     raw_quote: str = ""
     review_status: str = "auto"
+    unit: str = ""
     def to_prompt_item(self) -> dict[str, Any]:
         """给模型看的字段（**不含** source_url/页码 —— 那些模型无权生成）。"""
         return {
@@ -246,7 +256,8 @@ class Candidate:
         同一条数据在不同页/不同文档上的上下文长短不一，但**本期值那个数字是一样的**，
         它才是"是不是同一条事实"的判据。
         """
-        return (self.metric, self.lead_value())
+        value = self.lead_value()
+        return (self.metric, value or f"{self.document_id}:{self.source_page}")
 
     def lead_value(self) -> str:
         """引文里第一个「像数据」的数字（表格转写里的本期值）。"""
@@ -355,9 +366,14 @@ def verify_quote_on_page(quote: str, page_text: str, *, max_span: int = MAX_QUOT
     if not page:
         return False, "拿不到该页原文（既没有 chunks，也没有页界标记）", ()
 
+    # 新扩展 Evidence 直接从页面原文切出连续片段；先走最强的整串核验，也避免
+    # 同一页重复出现相同数字时，旧的“找第一个数字”策略产生假阴性。
+    needle = squeeze(quote)
+    if _MIN_QUOTELESS_CHARS <= len(needle) <= max_span and needle in page:
+        return True, "", tuple(tokens)
+
     if not tokens:
         # 定性引文：走整串连续子串比对
-        needle = squeeze(quote)
         if len(needle) < _MIN_QUOTELESS_CHARS:
             return (
                 False,
@@ -425,7 +441,23 @@ def contiguous_quote(
         chosen.append(match)
 
     start, end = chosen[0].start(), chosen[-1].end()
-    start = _window_start(page_text, start, end, label, max_span)
+    trailing_unit = re.match(
+        r"\s*(?:人民币\s*)?(?:万元|亿元|千元|元)(?:[/／](?:股|人|家))?",
+        page_text[end:],
+    )
+    if trailing_unit and trailing_unit.end() <= max_span:
+        end += trailing_unit.end()
+    # `quote_tokens` 会刻意忽略“每10股”里的小整数 10；若只从第一个金额
+    # 开始截，分红公式的基数就会消失。新扩展 Evidence 的金额前缀本身是
+    # 页面连续原文，短前缀能在窗口内逐字定位时优先把它一起保留。
+    context_label = label
+    tokens = quote_tokens(quote)
+    if tokens:
+        token_position = quote.find(tokens[0])
+        prefix = quote[:token_position].strip() if token_position >= 0 else ""
+        if 2 <= len(squeeze(prefix)) <= 80 and prefix in page_text[:start]:
+            context_label = prefix
+    start = _window_start(page_text, start, end, context_label, max_span)
     return _tidy(page_text[start:end])
 
 
@@ -459,6 +491,7 @@ def _window_start(page_text: str, start: int, end: int, label: str, max_span: in
     但**绝不能为了好看把窗口撑过上限**，那会让摘录不再是原文里的一段。
     """
     head = page_text[:start]
+    starts: list[int] = []
     for candidate in (label.strip(), _last_unit_tail(head)):
         if not candidate:
             continue
@@ -466,8 +499,19 @@ def _window_start(page_text: str, start: int, end: int, label: str, max_span: in
         if position < 0:
             continue
         if end - position <= max_span:
-            return position
-    return start
+            starts.append(position)
+
+    unit_window_start = max(0, start - max_span)
+    unit_window = head[unit_window_start:]
+    unit_matches = list(re.finditer(
+        r"(?:单位|金额单位)\s*[:：]\s*(?:人民币\s*)?(?:元|万元|亿元|千元)|[（(](?:元|万元|亿元|千元)[）)]",
+        unit_window,
+    ))
+    if unit_matches:
+        position = unit_window_start + unit_matches[-1].start()
+        if end - position <= max_span:
+            starts.append(position)
+    return min(starts) if starts else start
 
 
 def _last_unit_tail(head: str) -> str:
@@ -578,11 +622,20 @@ def metrics_for_question(question: str) -> tuple[str, ...]:
     text = str(question or "")
     if not text.strip():
         return ()
+    nomination_only = any(
+        phrase in text
+        for phrase in ("实控人提名", "实际控制人提名", "控股股东提名", "实控人几席", "控股股东几席")
+    ) and not any(
+        phrase in text
+        for phrase in ("实控人是谁", "实际控制人是谁", "谁是实控人", "谁控制", "控制权归谁")
+    )
     metrics: list[str] = []
     for index, (keywords, wanted) in enumerate(METRIC_RULES):
         if not any(k in text for k in keywords):
             continue
         for metric in wanted:
+            if nomination_only and metric == "actual_controller":
+                continue
             if metric not in metrics:
                 metrics.append(metric)
         if index == _TREND_RULE_INDEX:
@@ -730,7 +783,7 @@ def _doc_filter_sql() -> str:
     return "d.parse_status = 'ok' AND d.superseded = 0"
 
 
-def _fetch_rows(stock_code: str) -> list[sqlite3.Row]:
+def _fetch_rows(stock_code: str, metrics: Sequence[str] = ()) -> list[sqlite3.Row]:
     """参数化读取候选证据行（JOIN docs 补标题与外链）。
 
     ⚠️ `source_url` 只在它真实存在时进 SELECT：老库没有这列，
@@ -746,19 +799,24 @@ def _fetch_rows(stock_code: str) -> list[sqlite3.Row]:
                 select_extra.append(f"d.{name}")
         extended = {"parse_status", "superseded"}.issubset(doc_cols)
         where = "e.company_code = ?"
+        params: list[str] = [stock_code]
         if extended:
             where += " AND " + _doc_filter_sql()
         if "excluded" in evidence_cols:
             where += " AND COALESCE(e.excluded, 0) = 0"
+        cleaned_metrics = [str(metric).strip() for metric in metrics if str(metric).strip()]
+        if cleaned_metrics:
+            where += " AND e.metric IN (" + ",".join("?" for _ in cleaned_metrics) + ")"
+            params.extend(cleaned_metrics)
         sql = (
             "SELECT e.id AS evidence_id, e.company_code, e.document_id, e.category, "
-            "       e.metric, e.period, e.content, e.source_page, e.source_quote, "
+            "       e.metric, e.period, e.value, e.unit, e.content, e.source_page, e.source_quote, "
             "       e.review_status, "
             + ", ".join(select_extra)
             + " FROM evidence e JOIN docs d ON d.id = e.document_id "
             "WHERE " + where + " ORDER BY e.id"
         )
-        return list(db._rows(con, sql, (stock_code,)))
+        return list(db._rows(con, sql, tuple(params)))
 
 
 def _has_evidence_table() -> bool:
@@ -815,6 +873,7 @@ def retrieve_candidates(
     max_candidates = int(max_candidates or settings.DYNAMIC_MAX_CANDIDATES)
     max_per_document = int(max_per_document or settings.DYNAMIC_MAX_PER_DOCUMENT)
     max_quote_span = int(max_quote_span or settings.DYNAMIC_MAX_QUOTE_SPAN)
+    wanted = metrics_for_question(question) or DEFAULT_METRICS
 
     # 旧库（只有 8 列 docs、没有 evidence 表）直接返回空 —— 见 _has_evidence_table 的说明
     if not _has_evidence_table():
@@ -822,7 +881,7 @@ def retrieve_candidates(
         return []
 
     try:
-        rows = _fetch_rows(code)
+        rows = _fetch_rows(code, wanted)
     except db.DatabaseNotReadyError:
         logger.warning("动态检索失败：数据库不可用（%s）", code)
         return []
@@ -851,8 +910,6 @@ def retrieve_candidates(
                         pages_by_doc[key] = db.document_page_text(document_id, page)
                     except (db.DatabaseNotReadyError, ValueError):
                         pages_by_doc[key] = ""
-
-    wanted = metrics_for_question(question) or DEFAULT_METRICS
 
     verified: list[Candidate] = []
     rejected: dict[str, int] = {}
@@ -886,13 +943,19 @@ def retrieve_candidates(
         )
         quote_for_response = contiguous or _tidy(raw_quote)
         keys = row.keys()
-        report_period = str(row["report_period"]) if "report_period" in keys else ""
+        report_period = str(row["report_period"] or "") if "report_period" in keys else ""
         normalized_period = _normalize_period(
             _document_period(str(row["file_name"] or ""), str(row["period"] or ""), report_period)
         )
         metric = str(row["metric"] or "")
-        metric_label = label or METRIC_LABELS.get(metric, metric)
+        metric_label = METRIC_LABELS.get(metric, label or metric)
 
+        category = str(row["category"] or "financial")
+        content = (
+            f"{metric_label}（{normalized_period}）" if metric in TOPIC_BY_METRIC and normalized_period
+            else metric_label if metric in TOPIC_BY_METRIC
+            else _synthesize_content(metric_label, normalized_period, quote_for_response)
+        )
         verified.append(
             Candidate(
                 id="",  # 编号在排序后统一分配（保证 EV-001 是相关性最高的那条）
@@ -900,13 +963,13 @@ def retrieve_candidates(
                 metric=metric,
                 period=normalized_period,
                 metric_label=metric_label,
-                category=str(row["category"] or "financial"),
+                category=category,
                 # ⚠️ 刻意**不用**库里的 evidence.content：
                 #    实测它是自动抽取的残渣（如「营业收入：214.0%」「一、营业收入：187.0元」），
                 #    数字被截断成三位、单位还错。把这种东西当"证据摘要"发给前端，
                 #    只会让评审看到明显不对的数字。这里用**已核验过的原文摘录**
                 #    重新拼一句确定性摘要，信息量不低于原字段且不会误导。
-                content=_synthesize_content(metric_label, normalized_period, quote_for_response),
+                content=content,
                 document_id=int(row["document_id"]),
                 document_title=str(row["file_name"] or ""),
                 source_page=int(page),
@@ -917,6 +980,7 @@ def retrieve_candidates(
                 verified_tokens=tokens,
                 raw_quote=raw_quote,
                 review_status=str(row["review_status"] or "auto"),
+                unit=str(row["unit"] or ""),
             )
         )
 
@@ -1080,6 +1144,7 @@ METRIC_LABELS: dict[str, str] = {
     "rd_ratio": "研发投入占营业收入的比例",
     "accounts_receivable": "应收账款",
     "inventory": "存货",
+    **INVESTOR_METRIC_LABELS,
 }
 
 
