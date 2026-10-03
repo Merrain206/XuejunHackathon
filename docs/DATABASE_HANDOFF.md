@@ -2,7 +2,7 @@
 
 > 日期：2026-10-02
 > 任务书：`docs/TONIGHT_DATABASE_TASKS.md`
-> 候选库：`cninfo.multicompany.next.db`（**未替换**稳定库 `cninfo.db`）
+> 历史交接：本文件记录首轮 `cninfo.multicompany.next.db` 候选库（503/407 Evidence）。后续 v2 已于 2026-10-03 晋升为稳定 `cninfo.db`；当前事实以 `docs/HANDOFF.md` 为准。
 
 ## 1. 结论速览
 

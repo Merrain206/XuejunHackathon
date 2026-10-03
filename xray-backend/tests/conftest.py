@@ -84,6 +84,7 @@ os.environ["LLM_ENABLED"] = "true"
 os.environ["LLM_FAKE"] = "true"          # 默认不联网
 os.environ["DEEPSEEK_API_KEY"] = ""      # 真 Key 一律不带进测试
 os.environ["CHARTS_ENABLED"] = "true"
+os.environ["ADMIN_TOKEN"] = "test-admin-token"
 
 # ---------------------------------------------------------------------------
 # 测试数据：3 家公司，含各种 created_at 格式与一条坏日期

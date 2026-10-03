@@ -112,7 +112,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origin_list or ["*"],
+        allow_origins=settings.cors_origin_list,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -137,9 +137,10 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def _unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("未处理异常 %s %s", request.method, request.url.path)
+        detail = f"{type(exc).__name__}: {exc}" if settings.DEBUG else ""
         return JSONResponse(
             status_code=500,
-            content={"error": "服务器内部错误", "detail": f"{type(exc).__name__}: {exc}"},
+            content={"error": "服务器内部错误", "detail": detail},
         )
 
     # ---------------- 路由 ----------------

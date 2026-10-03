@@ -2,6 +2,8 @@
 
 面向答辩/演示的**招股书核验问答系统**后端。
 
+> 当前状态（2026-10-03）：v2 已晋升为仓库根目录稳定 `cninfo.db`，共有 2254 条 Evidence、2158 条可用、96 条隔离。动态问答已覆盖财务、治理、审计、股东回报、员工与激励、供应链、研发和风险等主题，并可从最终 Evidence 确定性生成折线图/柱状图。本文保留的首轮 503/407 Evidence 与 P0 `charts=[]` 说明仅是历史实现记录；最终事实与验证结果以 `docs/HANDOFF.md` 为准。
+
 **数据源**：`cninfo.db` 的 `docs` / `chunks` / `evidence` 表 —— 从 PDF 提取的**公告原文**。
 **三条稳定 Demo 问题**：由 `demo_handlers.py` 用**已核验的证据**确定性作答
 （不依赖大模型、不依赖缓存，毫秒级返回）。
@@ -36,8 +38,8 @@
 # 1) 装依赖 + 准备配置
 python -m pip install -r requirements.txt
 cp .env.example .env        # Windows: copy .env.example .env
-#   数据库位置留空即可自动探测；只有非默认布局才需要填写（见 ③）。
-#   DATABASE_PATH=
+#   公开部署建议显式指定仓库根稳定库，并用 /health 核对绝对路径（见 ③）。
+#   DATABASE_PATH=D:\Codes\XueJunHackathon\cninfo.db
 #   DEEPSEEK_API_KEY=         ← 可选！三条稳定问题不需要大模型
 
 # 2) 起服务（三条稳定问题无需大模型，也无需先跑批处理）
@@ -48,7 +50,7 @@ python scripts/run_night_batch.py --demo
 ```
 
 > **不配 API key 也能完整演示三条稳定问题** —— 这正是做确定性处理器的理由。
-> 当前 `POST /ask` 不调用大模型；认不出的意图一律返回证据不足。
+> 三条稳定问题不调用大模型；其他已覆盖金融问题在检索到可用 Evidence 后调用 DeepSeek，认不出的意图一律返回证据不足。
 
 ### 四条演示问题（真实调用示例）
 
@@ -90,10 +92,10 @@ curl -s http://127.0.0.1:8000/health
 
 | 接口 | 说明 |
 | --- | --- |
-| `POST /companies/{stock_code}/ask` | 主接口：三条稳定问题确定性作答；其余返回固定兜底 |
+| `POST /companies/{stock_code}/ask` | 主接口：三条稳定问题确定性作答；其他已覆盖金融问题走动态 Evidence-first |
 | `GET /companies/{stock_code}/profile` | 公司画像：公告数量、日期区间、最近标题、风险摘要 |
 | `GET /companies/{stock_code}/signals` | 风险信号（来自缓存的分析结论） |
-| `POST /admin/refresh?stock_code=xxx` | 手动触发分析（`X-Admin-Token` 头或 `?token=`） |
+| `POST /admin/refresh?stock_code=xxx` | 手动触发分析；`ADMIN_TOKEN` 留空时关闭，启用后只接受 `X-Admin-Token` 请求头 |
 | `GET /health` | 健康检查 + 数据源状态 + 缓存统计 |
 
 | `GET /search?keyword=xxx` | 全文检索公告（演示时找证据） |
@@ -114,7 +116,7 @@ curl -s "http://127.0.0.1:8000/search?keyword=营业收入"
 
 # 手动分析一家（或全部）
 curl -s -X POST "http://127.0.0.1:8000/admin/refresh?stock_code=688583" \
-  -H "X-Admin-Token: xray-demo-token"
+  -H "X-Admin-Token: <随机长 token>"
 ```
 
 代码带交易所后缀也能识别（`688583.SH` → `688583`）。
@@ -276,7 +278,7 @@ python scripts/check_frontend_contract.py
  → 生成 EV-001…EV-0NN 的**封闭候选集合**（6~15 条）
  → dynamic_qa 组装 JSON-only Prompt → DeepSeek → 解析（含容错）
  → 机械校验：悬空 id 丢弃、无证据条目丢弃、数字必须能在引文里核到
- → 组装响应（P0 固定 charts: []）→ 再走统一出口 response_validator
+ → 从最终 Evidence 确定性构建图表（需要时最多 3 张）→ 再走统一出口 response_validator
 ```
 
 ### 引文核验为什么不是「整串子串匹配」
@@ -293,9 +295,7 @@ python scripts/check_frontend_contract.py
 3. 首末数字在该页上的**跨度不得超过 `DYNAMIC_MAX_QUOTE_SPAN`**（默认 200 字符）——
    保证它们确实属于同一段连续原文。
 
-实测（真实 `cninfo.db` 的 503 条 evidence）：机械核验通过 **485** 条，
-未通过的 18 条全部是**真问题**（16 条数字顺序与页面不一致、2 条跨度超限），
-另有 3 条**纯文字**的风险因素证据走下面的"无数字"口径。
+首轮 503 条 Evidence 的核验结果属于历史基线；当前稳定库已在扩库阶段重新执行连续原文、长度和数字边界校验，2254 条中有 2158 条可参与回答、96 条隔离。
 
 **例外：不含数字的定性引文**（风险因素、政策表述）。新库里 688583 有 3 条
 `review_status='verified'`、`method='manual'` 的风险证据，通篇没有数字 ——
@@ -357,8 +357,8 @@ deepseek-flash 仍会：
 | --- | --- | --- |
 | `docs` | 1905 条公告（14 列，含 `document_type` / `report_period` / `published_at` / `source_url` / `parse_status` / `superseded`） | 公告元数据、正文、**真实直链** |
 | `chunks` | 2845 条**按页切分**的正文（`page_number` + `content`） | **核验页码**、给 LLM 贴分页原文 |
-| `evidence` | 503 条结构化证据（四家公司；含 **3 条 `review_status='verified'`** 与 `category='risk'`） | 动态问答的候选来源；`value`/`unit` 不可信 |
-| `chunks_fts` | 801 行全文索引（`meta.fts_mode=trigram`） | 备用（当前检索仍走参数化 `LIKE`） |
+| `evidence` | 2254 条结构化证据（2158 条可用、96 条隔离） | 动态问答的候选来源；后端强制过滤 `excluded=1` |
+| `chunks_fts` | 2845 / 2845 条全文索引（`meta.fts_mode=trigram`） | 全文检索与候选召回 |
 | `meta` | `schema_version=1.0` / `fts_mode=trigram` | 能力探测 |
 
 > **四家公司的 `docs.source_url` 已 100% 补齐**（688583 312/312、600570 564/564、
@@ -692,44 +692,26 @@ python scripts/check_batch.py    # analyzer + 批处理
 | --- | --- |
 | `evidence.verification_status` | **新增可选字段**（`verified`/`auto`/`pending`）。不返回时前端按未标注处理；`pending` 永远不会出现。加可选字段是为了不破坏现有前端契约 |
 | 响应头 `X-XRay-Cache` | 新增取值 `dynamic-llm`（动态链路作答）与 `insufficient`（固定兜底）。`demo-handler` 仍是思看科技三条稳定问题 |
-| 动态回答的 `charts` | **固定 `[]`**（P0 不生成图表）。前端的图表区域需要能容忍空数组 |
+| 动态回答的 `charts` | 从最终通过校验的 Evidence 确定性构建；支持 `line` / `bar`，一个复合问题最多 3 张 |
 | `suggested_questions` | 思看科技仍是原来四条、顺序不变；**其他三家公司用产品约定的通用四问**（营收/归母净利润、经营现金流、盈利趋势、员工水果） |
 | `evidence.category` | 库里 `category='risk'` 的证据在响应里是 **`business`**（前端只认三个值，见「已知限制」第 7 条） |
-| 非思看公司的风险问题 | 目前返回**固定证据不足**（库里没有它们的风险类证据），不是报错、也不是拿财务数据充数 |
+| 非思看公司的风险问题 | 可总结当前 Evidence 直接支持的风险信号，但不得声称覆盖全部经营、法律、行业或合规风险 |
 
 ### 已知限制 / 未完成事项
 
 1. **注册稿 PDF 不在版本库**（13 MB）。页码核验用例需要手工下载后才跑，
    否则 skip；库那份是上市稿，**不能**替注册稿作证。
-2. **`cninfo.db` 不入库**（`*.db` 已 gitignore），需自行放置到仓库根目录。
-   仓库根的 `cninfo.db.bak-20261002` 是换库前的备份（同样不入库）。
+2. **`cninfo.db` 不入库**（`*.db` 已 gitignore），部署时需单独放置到仓库根目录。当前回滚备份为 `cninfo.pre-v2-7408dcc2.db`（同样不入库）。
 3. 半年报页码虽与库完全一致，但 SSE 该 URL 对脚本化下载返回 JS 反爬页
    （浏览器/正常客户端可打开）；核验时用的是与之同版的库内文档 + 人工确认。
 4. Nightly Pipeline / Snapshot / 维护模式均**未接入当前产品闭环**，
    属目标架构，不要当成已完成能力。
-5. **动态问答的数据侧限制**（都是数据问题，不是代码问题）：
-   * `evidence.value` / `unit` / `content` 是自动抽取的残渣
-     （如「营业收入：214.0%」「一、营业收入：187.0元」），**不可信、不直接使用**；
-     动态证据的 `content` 由后端按已核验摘录重新拼；
-   * `evidence.period` 有误标（2025 半年报的行里混着 `2026FY`），
-     所以报告期以 `docs.report_period` / 文档标题为准；
-   * **503 条 evidence 里只有 3 条是人工核验的**（688583 的风险因素），
-     其余 500 条都是 `review_status='auto'`；候选库当前只允许 407 条 Evidence 参与动态问答，
-     其中 404 条只是通过**机械核验**（页码 + 原文逐字 + 链接），不是人工核验 ——
-     `verification_status` 如实区分 `verified` / `auto`；
-   * 数据库已隔离 96/503 条无法安全形成精确短摘录或字段有缺陷的 Evidence，
-     这是**保守**的取舍：宁可少给证据，也不给一条无法回溯的引用；
-   * 单条引文由表格转写而来，上下文有时很短；
-     P0 只覆盖**结构化财务问题**，非结构化的风险类问题未接 `chunks` 全文检索。
-6. **风险类问题目前一律诚实拒答**（除思看科技的稳定风险问题外）。
-   库里只有 688583 有 3 条风险类证据，其他三家公司没有 ——
-   拿营收/净利润去"回答"风险问题是最坏的一种答非所问，所以宁可说证据不足。
-   要支持风险问答，需要数据库侧为四家公司补齐风险类证据（或接 `chunks` 全文检索）。
+5. **动态问答仍受公告覆盖和摘录上下文限制**：2158 条可用 Evidence 中绝大多数是机械核验的 `auto`，并非人工逐条核验；`verification_status` 必须如实展示。96 条无法安全形成精确短摘录或字段有缺陷的 Evidence 已隔离，不能参与候选、Prompt 或响应。
+6. **风险回答只能总结当前 Evidence 直接支持的信号**，不能冒充完整风险清单；诉讼、监管、质押、商誉等未检索到时，也不能推断公司不存在该事项。
 7. `category='risk'` 的证据在响应里被归一成 **`business`**：
    前端 `api.ts` 的 `isEvidence()` 只接受 financial/business/company，
    而任务书明确要求不得修改前端。这是**已知的契约妥协**，不是数据丢失。
-8. 动态回答 P0 **固定不生成图表**（`charts: []`）。前端对动态回答的展示
-   目前不需要图表；要加图表需先定义"哪个数字画哪根线"的证据规则。
+8. 动态图表只允许由后端从最终 Evidence 确定性构建，模型不得直接给出图表数值；证据不足时仍返回 `charts: []`。
 
 ---
 

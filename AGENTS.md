@@ -18,6 +18,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - `NEXT_PUBLIC_API_BASE_URL` 未配置时使用 Mock；后端超时、HTTP 错误或解析失败时必须自动降级为已核验演示数据，不能破坏 Demo。
 - 思看科技 UI 必须保持三条稳定演示问题：收入结构、盈利质量、主要风险；另有第四问「你的员工喜欢吃水果吗？」用于演示证据不足。其他公司允许基于 SQLite Evidence + LLM 回答未预设的普通投资者问题，也允许基于 Evidence 总结可观察的风险信号，但不得声称覆盖全部经营、法律、行业或合规风险；所有动态回答同样必须通过 Evidence 校验。
 - 动态图表由后端根据最终通过校验的 Evidence 确定性构建，不接受模型直接生成图表数据。当前支持折线图和柱状图；一个问题可按单位和指标拆成最多 3 张图，图中每个数值都必须能追溯到图表自己的 `evidence_ids`。
+- 公开部署必须显式指定稳定 `cninfo.db`、真实前端域名 CORS 和服务端 DeepSeek Key；`ADMIN_TOKEN` 留空即关闭管理刷新接口，启用时只允许通过 `X-Admin-Token` 请求头传入。
 - Evidence 页码使用 PDF 查看器页码，且必须与引用的 PDF 版本配套（两份 PDF 的页码不可混用）：招股说明书（注册稿，506 页）第 **321、322、324** 页；2025 半年报（269 页）第 **2、8、9、43** 页。核验记录见 `docs/HANDOFF.md` 第 4.1 节。
 - 后端 `source_url` 只返回不带 fragment 的原始 PDF URL，页码通过 `source_page` 独立返回；前端负责追加 `#page=N`，禁止前后端重复追加。
 - 思看科技 `suggested_questions` 保持原四条和固定顺序；其他公司使用代码中已确认的普通投资者问题，不得由模型自由生成或推荐无证据覆盖的问题。

@@ -337,6 +337,18 @@ def test_admin_refresh_requires_token(client, fake_llm):
     assert set(denied.json().keys()) == {"error", "detail"}
 
 
+def test_admin_refresh_is_disabled_without_configured_token(client, fake_llm, monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "")
+    response = client.post(
+        "/admin/refresh",
+        params={"stock_code": "688583", "token": "xray-demo-token"},
+    )
+    assert response.status_code == 503
+    assert response.json()["error"] == "管理接口未启用"
+
+
 def test_admin_refresh_with_token_analyzes(client, fake_llm):
     from config import settings
 

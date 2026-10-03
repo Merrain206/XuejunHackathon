@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     # ---------------- 数据源：cninfo.db ----------------
     #: 相对路径锚定到 xray-backend/；找不到时会自动尝试 ../data/cninfo.db
-    DB_PATH: str = "data/cninfo.db"
+    DB_PATH: str = "../cninfo.db"
     #: BACKEND_NEXT_STEPS.md 规定用 DATABASE_PATH 配置库位置。
     #: 两者都支持：DATABASE_PATH 优先，未设置时回落到 DB_PATH（向后兼容）。
     DATABASE_PATH: str = ""
@@ -124,8 +124,6 @@ class Settings(BaseSettings):
     #: 总开关：false 时除思看科技三条稳定问题外，其余问题一律走固定证据不足。
     #: 动态链路不稳定时的**保命开关** —— 关闭它绝不会影响稳定三问。
     DYNAMIC_QA_ENABLED: bool = True
-    #: 动态回答是否允许出现图表。P0 固定 false（任务书：第一版不生成图表）。
-    DYNAMIC_CHARTS_ENABLED: bool = False
     #: 给模型的候选证据条数（任务书要求 6~15 条，不能把整库塞进 Prompt）
     DYNAMIC_MAX_CANDIDATES: int = 15
     #: 单份文档最多贡献几条候选
@@ -161,8 +159,8 @@ class Settings(BaseSettings):
     MATCH_SIMILARITY_THRESHOLD: float = 0.8
 
     # ---------------- 管理接口 ----------------
-    #: POST /admin/refresh 的简单 token 校验（也可用 X-Admin-Token 请求头传入）
-    ADMIN_TOKEN: str = "xray-demo-token"
+    #: POST /admin/refresh 的管理 token。留空时接口关闭，避免公开部署沿用默认口令。
+    ADMIN_TOKEN: str = ""
 
     # ---------------- 日志 ----------------
     LOG_LEVEL: str = "INFO"

@@ -16,7 +16,7 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 
 ## 2. 当前已经完成
 
-> 本节只描述已经完成并验收的能力。动态链路已通过数据库、合成后端、真实库、前端契约和真实 DeepSeek API 冒烟；扩展主题仍需产品负责人继续做浏览器人工验收。
+> 本节只描述已经完成并验收的能力。动态链路已通过数据库、合成后端、真实库、前端契约、真实 DeepSeek API 冒烟和产品负责人浏览器人工验收。
 
 - Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 前端。
 - 公司页路由：`/company/{id}`，根路径自动跳转到 `/company/688583`。
@@ -208,19 +208,27 @@ npm run build
 
 结论：扩展库的数据隔离、机械证据质量和浏览器展示均通过人工验收。2026-10-03 经产品负责人确认，v2 已原子晋升为稳定 `cninfo.db`，SHA-256 为 `639e6c8c672c188c259829d3917c65b15d73a6f33f00f2ba6eb151cdbe90cac1`；旧稳定库备份为 `cninfo.pre-v2-7408dcc2.db`，SHA-256 为 `7408dcc2be70c3afbbd0bd4437beea6f2f5bf63803f6a69a6f8ce932055cad40`。替换后 `PRAGMA integrity_check=ok`，共 2254 条 Evidence、2158 条可用 Evidence。
 
+### 7.4 最终部署审计（2026-10-03）
+
+- Next.js 生产构建、数据库回归、合成后端、真实库和前后端契约检查均通过；`tests` 与 `tests_real` 继续保持分进程执行。
+- `npm audit --omit=dev --audit-level=high` 与后端虚拟环境 `pip-audit` 均未发现已知依赖漏洞。
+- 后端默认数据库路径已改为仓库根目录稳定 `cninfo.db`；生产仍应显式配置 `DATABASE_PATH` 与 `DB_PATH_STRICT=true`，并通过 `/health` 核对绝对路径。
+- 管理刷新接口不再接受 URL 查询参数 token；`ADMIN_TOKEN` 留空时接口关闭，启用后只接受 `X-Admin-Token` 请求头。生产 500 响应默认不向客户端泄露异常细节，CORS 不再在空配置时回退为通配符。
+- 当前结论是“适合 Hackathon 路演与受控单实例部署”，不是完整生产安全认证。公开互联网部署仍需 HTTPS/反向代理、限流、日志与告警，并应轮换曾在协作对话中出现过的 DeepSeek Key。
+
 ## 8. V0.2 架构：规划而非现状
 
 产品规划采用“白天查询，夜间更新”：22:00–05:00 构建新的数据 Snapshot，验证通过才原子切换；失败则继续使用上一份稳定 Snapshot。后端计划增加 `GET /system/status`、维护期 503、Snapshot 元数据、Nightly Intelligence Pipeline 和 Evidence Validation。
 
 这些能力目前尚未接入前端。实现时先确认后端接口已经可用，再做维护页和 Snapshot 更新时间展示；不要只按本地时间强制锁死页面，也不要把架构文档中的规划当作已完成事实。
 
-## 9. 下一步优先级
+## 9. Demo 完工状态与下一步
 
-1. 用浏览器人工覆盖 `docs/INVESTOR_EVIDENCE_EXPANSION.md` 中的主题样例，重点检查复合问题的部分回答、2–3 张图表布局和移动端可读性。
+1. 2026-10-03 产品负责人确认最终人工回归全部正常，Demo 功能冻结；后续优先制作路演材料和部署，除阻断演示的 Bug 外不再扩功能。
 2. 保持思看科技确定性三问及其 Mock/Fallback 不退化，作为动态链路失败时的稳定 Demo。
-3. 稳定库晋升已经完成；下一轮回归确认前保留 `cninfo.pre-v2-7408dcc2.db` 作为回滚备份。
+3. 保留 `cninfo.pre-v2-7408dcc2.db` 作为稳定库回滚备份，不删除、不提交。
 4. 如需真正回答“毛利率跟同行比怎么样”，先由产品负责人确认同行口径，再补齐同行公司官方披露 Evidence；不要拿当前四家公司互相比。
-5. 继续确认没有跨公司引用、跨 Evidence 数字借用、被隔离证据泄漏或模型生成的无证据图表。
+5. 对外部署必须显式指定稳定库、真实前端域名 CORS、服务端 DeepSeek Key；不需要远程刷新时保持 `ADMIN_TOKEN` 为空。
 
 需要用户决策的问题：真实后端契约发生变化、是否启用维护模式、是否牺牲 Demo 稳定性增加新功能。不要擅自扩大范围。
 

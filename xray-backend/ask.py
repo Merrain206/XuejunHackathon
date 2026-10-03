@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import time
 from datetime import datetime
 from typing import Any
@@ -573,12 +574,13 @@ def admin_refresh(
     request: Request,
     stock_code: str | None = Query(default=None, description="留空 = 遍历全部公司"),
     force: bool = Query(default=True, description="忽略当日缓存，强制重新分析"),
-    token: str | None = Query(default=None, description="简单 token 校验"),
 ) -> Any:
-    provided = request.headers.get("X-Admin-Token") or token or ""
-    if provided != settings.ADMIN_TOKEN:
+    if not settings.ADMIN_TOKEN:
+        return error_response(503, "管理接口未启用", "请先配置 ADMIN_TOKEN")
+    provided = request.headers.get("X-Admin-Token") or ""
+    if not secrets.compare_digest(provided, settings.ADMIN_TOKEN):
         logger.warning("admin/refresh 鉴权失败（stock_code=%s）", stock_code)
-        return error_response(401, "鉴权失败", "token 不正确；请通过 X-Admin-Token 头或 ?token= 传入")
+        return error_response(401, "鉴权失败", "token 不正确；请通过 X-Admin-Token 请求头传入")
 
     from analyzer import analyze_company, analyze_many, demo_stocks
 
@@ -636,7 +638,7 @@ def health() -> Any:
             logger.exception("读取缓存统计失败")
 
     capabilities = {
-        "data_source": "data/cninfo.db（docs 表公告原文）",
+        "data_source": "cninfo.db（docs 表公告原文）",
         "answer_contract": [
             "answer",
             "claims",
@@ -655,7 +657,7 @@ def health() -> Any:
             "ready": settings.llm_ready,
             "model": settings.DEEPSEEK_MODEL,
             "fake": settings.LLM_FAKE,
-            "note": "风险判断在批处理时调用；ask 接口只读缓存",
+            "note": "动态问答按需调用模型；稳定问题使用确定性处理器",
         },
         "scheduling": "应用内无调度器；生产由系统 cron 调 scripts/run_night_batch.py",
         "settings": settings.describe(),

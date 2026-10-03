@@ -1,7 +1,7 @@
 # 普通投资者 Evidence 扩展
 
 > 状态日期：2026-10-03
-> 当前产物：`cninfo.multicompany.expanded.v2.db`（候选库，不替换稳定库）
+> 当前产物：`cninfo.multicompany.expanded.v2.db`；2026-10-03 经产品负责人验收后，已晋升为稳定 `cninfo.db`
 
 ## 1. 目标与边界
 
@@ -21,7 +21,7 @@
 
 基础数据库原有的营业收入、归母净利润、经营现金流、毛利率、总资产、资产负债率等财务指标继续保留。复合问法会同时检索相关主题；若只有部分 Evidence，就只回答能证明的子问题。
 
-## 3. 候选库结果
+## 3. v2 结果
 
 输入库：`cninfo.multicompany.next.db`
 输出库：`cninfo.multicompany.expanded.v2.db`
@@ -85,4 +85,4 @@ cd .\xray-backend
 .\.venv\Scripts\python.exe scripts\check_frontend_contract.py
 ```
 
-`tests` 与 `tests_real` 必须分开进程执行，避免 `config.settings` 因导入顺序绑定到错误数据库。数据库文件均被 Git 忽略，不得提交或自动替换 `cninfo.db`。
+`tests` 与 `tests_real` 必须分开进程执行，避免 `config.settings` 因导入顺序绑定到错误数据库。数据库文件均被 Git 忽略，不得提交；未来生成的新候选库也不得自动覆盖当前稳定 `cninfo.db`。

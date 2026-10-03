@@ -28,6 +28,17 @@ Content-Type: application/json
 {"question":"你的收入结构发生了什么变化？"}
 ```
 
+后端从 `xray-backend/.env` 读取 DeepSeek Key。启动时显式指向已验收的仓库根目录稳定库：
+
+```powershell
+cd xray-backend
+$env:DATABASE_PATH = "D:\Codes\XueJunHackathon\cninfo.db"
+$env:DB_PATH_STRICT = "true"
+.\.venv\Scripts\python.exe main.py
+```
+
+公开部署时还应设置实际前端域名对应的 `CORS_ORIGINS`。`ADMIN_TOKEN` 留空会关闭管理刷新接口；如需启用，必须配置随机长 token，并仅通过 `X-Admin-Token` 请求头传入。
+
 请求路径中的公司代码随当前页面切换，前端超时为 45 秒。思看科技请求失败时回退到已核验 Demo；其他公司请求失败时只显示证据不足/服务不可用状态。
 
 响应字段采用 Python 友好的 snake_case：
@@ -94,6 +105,12 @@ Content-Type: application/json
 
 ## 验证
 
-```bash
+```powershell
 npm run build
+
+cd xray-backend
+.\.venv\Scripts\python.exe -m pytest tests -q
+.\.venv\Scripts\python.exe -m pytest tests_real -q
 ```
+
+`tests` 与 `tests_real` 必须分别运行，不能放入同一个 pytest 进程。

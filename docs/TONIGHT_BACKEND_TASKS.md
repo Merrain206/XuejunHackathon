@@ -1,6 +1,6 @@
 # 今晚任务书：后端 Agent
 
-> 状态：PR #8 已实现首轮动态问答；`docs/SUPPLEMENTAL_DATABASE_BACKEND_TASKS.md` 所列代码与自动化验收已完成，仍待真实 DeepSeek + 浏览器人工联调。
+> 历史任务书：PR #8 已实现首轮动态问答；真实 DeepSeek、自动化和浏览器人工验收随后均已完成。当前状态以 `docs/HANDOFF.md` 为准。
 
 > 日期：2026-10-02  
 > 基线提交：`057d18a`  

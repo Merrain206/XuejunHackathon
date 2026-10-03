@@ -1,5 +1,7 @@
 # 后端 PR 描述：四公司动态 Evidence-first 问答
 
+> 历史 PR 说明：本文保留首轮 503/407 Evidence 动态链路的实现口径。后续 v2、动态图表、风险问答和稳定库晋升状态以 `docs/HANDOFF.md` 为准。
+
 > 任务书：`docs/TONIGHT_BACKEND_TASKS.md`（后端 Agent）
 > 分支：`main`（本仓库 Hackathon 工作流直接在 main 上推进）
 > 日期：2026-10-02
