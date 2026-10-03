@@ -496,6 +496,21 @@ def test_database_path_env_alias_is_used(monkeypatch: pytest.MonkeyPatch):
     assert fallback.DATABASE_PATH == "data/legacy.db"
 
 
+def test_database_path_defaults_to_repository_root(monkeypatch: pytest.MonkeyPatch):
+    """未配置环境变量时，配置字段本身也应是仓库根目录稳定库的绝对路径。"""
+    from config import BASE_DIR, Settings
+
+    monkeypatch.delenv("DATABASE_PATH", raising=False)
+    monkeypatch.delenv("DB_PATH", raising=False)
+
+    expected = BASE_DIR.parent / "cninfo.db"
+    fresh = Settings(_env_file=None)
+
+    assert Path(fresh.DB_PATH) == expected
+    assert Path(fresh.DATABASE_PATH) == expected
+    assert fresh.db_file == expected
+
+
 # ---------------------------------------------------------------------------
 # 响应校验器本身
 # ---------------------------------------------------------------------------

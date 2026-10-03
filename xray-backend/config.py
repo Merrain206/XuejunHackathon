@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     # ---------------- 数据源：cninfo.db ----------------
-    #: 相对路径锚定到 xray-backend/；找不到时会自动尝试 ../data/cninfo.db
-    DB_PATH: str = "../cninfo.db"
+    #: 默认直接使用仓库根目录的稳定库；环境变量仍可覆盖。
+    DB_PATH: str = str(BASE_DIR.parent / "cninfo.db")
     #: BACKEND_NEXT_STEPS.md 规定用 DATABASE_PATH 配置库位置。
     #: 两者都支持：DATABASE_PATH 优先，未设置时回落到 DB_PATH（向后兼容）。
     DATABASE_PATH: str = ""
