@@ -35,7 +35,7 @@ Ask the Company 是 X-Ray「透视·真相」赛道的企业信息理解产品�
 - 后端三条确定性回答、真实 SQLite 只读访问、上交所权威来源和四问样例已经接入代码库。
 - 四公司动态 Evidence-first 检索、DeepSeek 结构化回答与候选库重建工具已接入代码库；后端会过滤 `excluded=1`，Claim/Signal 数字按自身引用 Evidence 硬校验，无显式 Evidence ID 时不猜出处。
 - 非思看公司的财务、治理、审计、股东回报、员工与激励、供应链、关联关系、研发和风险问题会进入动态链路；回答不得声称覆盖全部经营、法律、行业或合规风险。
-- 扩展候选库 v2 共有 2254 条 Evidence，其中 2158 条可参与回答、96 条隔离；可用 Evidence 均为同页连续原文且不超过 200 字符，FTS 2845/2845。
+- 扩展库 v2 共有 2254 条 Evidence，其中 2158 条可参与回答、96 条隔离；可用 Evidence 均为同页连续原文且不超过 200 字符，FTS 2845/2845。2026-10-03 人工验收通过后，v2 已晋升为稳定 `cninfo.db`。
 - 动态图表不交给模型生成，而是由后端从最终引用 Evidence 确定性构建。当前支持 `line` / `bar`，趋势问题最多给 3 张折线图，最近一期复合指标会按单位拆成最多 3 张柱状图。
 
 ## 3. 稳定 Demo 脚本
@@ -144,8 +144,8 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```powershell
 cd xray-backend
 python -m pip install -r requirements.txt
-# 动态四公司联调必须显式使用已验收候选库；不要擅自覆盖稳定 cninfo.db
-$env:DATABASE_PATH = "D:\Codes\XueJunHackathon\cninfo.multicompany.expanded.v2.db"
+# 显式指向仓库根目录稳定库，避免误用 xray-backend/data/cninfo.db
+$env:DATABASE_PATH = "D:\Codes\XueJunHackathon\cninfo.db"
 $env:DB_PATH_STRICT = "true"
 python main.py                        # http://127.0.0.1:8000
 curl.exe -s http://127.0.0.1:8000/health     # 看 db_path 与 database
@@ -206,7 +206,7 @@ npm run build
 
 本轮自动化结果：扩库脚本 4 项通过；数据库验收 0 失败、1 个已解释警告；后端合成测试全通过；真实库测试 101 项通过、1 项按设计跳过；前后端契约 25 项通过；Next.js 生产构建通过。
 
-结论：扩展候选库的数据隔离和机械证据质量满足本轮验收，真实复杂问法的成功率明显改善，但仍需浏览器人工检查展示效果。当前没有替换稳定 `cninfo.db`；是否换库仍由产品负责人决定。
+结论：扩展库的数据隔离、机械证据质量和浏览器展示均通过人工验收。2026-10-03 经产品负责人确认，v2 已原子晋升为稳定 `cninfo.db`，SHA-256 为 `639e6c8c672c188c259829d3917c65b15d73a6f33f00f2ba6eb151cdbe90cac1`；旧稳定库备份为 `cninfo.pre-v2-7408dcc2.db`，SHA-256 为 `7408dcc2be70c3afbbd0bd4437beea6f2f5bf63803f6a69a6f8ce932055cad40`。替换后 `PRAGMA integrity_check=ok`，共 2254 条 Evidence、2158 条可用 Evidence。
 
 ## 8. V0.2 架构：规划而非现状
 
@@ -218,7 +218,7 @@ npm run build
 
 1. 用浏览器人工覆盖 `docs/INVESTOR_EVIDENCE_EXPANSION.md` 中的主题样例，重点检查复合问题的部分回答、2–3 张图表布局和移动端可读性。
 2. 保持思看科技确定性三问及其 Mock/Fallback 不退化，作为动态链路失败时的稳定 Demo。
-3. 自动化补充验收已完成；是否用候选库替换稳定 `cninfo.db` 仍由产品负责人决定。
+3. 稳定库晋升已经完成；下一轮回归确认前保留 `cninfo.pre-v2-7408dcc2.db` 作为回滚备份。
 4. 如需真正回答“毛利率跟同行比怎么样”，先由产品负责人确认同行口径，再补齐同行公司官方披露 Evidence；不要拿当前四家公司互相比。
 5. 继续确认没有跨公司引用、跨 Evidence 数字借用、被隔离证据泄漏或模型生成的无证据图表。
 
@@ -227,5 +227,5 @@ npm run build
 ## 10. 工作区注意事项
 
 - 修改前先执行 `git status --short`，不要覆盖其他同学的未提交改动。
-- `cninfo.db`、`cninfo(1).db`、`ruvector.db`、`cninfo.multicompany.next.db`、`cninfo.multicompany.expanded.db`、`cninfo.multicompany.expanded.v2.db` 不要删除、覆盖或提交，除非用户明确授权。
+- `cninfo.db`、`cninfo(1).db`、`ruvector.db`、`cninfo.multicompany.next.db`、`cninfo.multicompany.expanded.db`、`cninfo.multicompany.expanded.v2.db`、`cninfo.pre-v2-7408dcc2.db` 不要删除、覆盖或提交，除非用户明确授权。
 - 仓库只保留 Ask the Company 前端、后端、数据库管道与项目文档，不要混入其他独立项目。
